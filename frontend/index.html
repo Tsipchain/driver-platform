@@ -1,157 +1,103 @@
 <!doctype html>
 <html lang="el">
   <head>
-    <meta charset="utf-8" />
-    <title>Thronos Driver</title>
+    <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Thronos Driver</title>
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
     <div class="app-shell">
-      <div class="card">
+      <div id="loginScreen" class="card">
         <div class="card-header">
           <div>
-            <div class="card-title">Thronos Driver</div>
-            <div class="small-text">MVP για πιλοτικό Taxi / σχολές οδηγών</div>
+            <div class="card-title">Σύνδεση οδηγού</div>
+            <div class="small-text">Passwordless login με κινητό</div>
           </div>
-          <span class="badge">MVP</span>
+          <span class="badge">AUTH</span>
         </div>
 
         <div class="field-group">
-          <label for="driverName">Όνομα οδηγού</label>
-          <input id="driverName" placeholder="π.χ. Γιώργος" />
+          <label for="loginPhone">Κινητό τηλέφωνο</label>
+          <input id="loginPhone" placeholder="π.χ. 69XXXXXXXX" />
         </div>
-
-        <div class="row">
-          <div class="field-group">
-            <label for="driverPhone">Τηλέφωνο</label>
-            <input id="driverPhone" placeholder="+30..." />
-          </div>
-          <div class="field-group">
-            <label for="plateNumber">Πινακίδα</label>
-            <input id="plateNumber" placeholder="ΝΧΧ-1234" />
-          </div>
-        </div>
-
         <div class="field-group">
-          <label for="taxiCompany">Ταξί εταιρεία / σωματείο</label>
-          <input id="taxiCompany" placeholder="π.χ. Ραδιοταξί Θες/νίκης" />
+          <label for="loginEmail">Email (προαιρετικό)</label>
+          <input id="loginEmail" placeholder="name@example.com" />
+        </div>
+        <div class="field-group">
+          <label for="loginName">Όνομα (προαιρετικό)</label>
+          <input id="loginName" placeholder="π.χ. Γιώργος" />
+        </div>
+        <button class="primary full" id="btnSendCode">Αποστολή κωδικού</button>
+
+        <div class="field-group" id="codeWrap" style="display: none; margin-top: 10px">
+          <label for="loginCode">Κωδικός 6 ψηφίων</label>
+          <input id="loginCode" maxlength="6" placeholder="123456" />
+          <button class="primary full" id="btnVerifyCode">Επιβεβαίωση</button>
         </div>
 
-        <div class="small-text">
-          Τα στοιχεία αποθηκεύονται μόνο στο κινητό σου και στο Driver Service (όχι στο main chain).
+        <div class="small-text" id="authMessage"></div>
+      </div>
+
+      <div id="dashboardScreen" style="display:none;">
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">Thronos Driver</div>
+              <div class="small-text" id="loggedInAs"></div>
+            </div>
+            <button class="outline" id="btnOpenProfile">Profile & Wallet</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Δρομολόγιο</div>
+            <div class="status-pill" id="tripStatus"><strong>Off</strong> — δεν υπάρχει ενεργό</div>
+          </div>
+          <div class="field-group"><label for="tripOrigin">Αφετηρία</label><input id="tripOrigin" /></div>
+          <div class="field-group"><label for="tripDestination">Προορισμός</label><input id="tripDestination" /></div>
+          <div class="field-group"><label for="tripNotes">Σημειώσεις</label><textarea id="tripNotes" rows="2"></textarea></div>
+          <div class="row">
+            <button class="primary full" id="btnStartTrip"><span class="dot"></span> Start</button>
+            <button class="outline full" id="btnFinishTrip">Finish</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><div class="card-title">Telemetry (χειροκίνητο)</div></div>
+          <div class="row">
+            <div class="field-group"><label for="gpsLat">GPS Lat</label><input id="gpsLat" /></div>
+            <div class="field-group"><label for="gpsLng">GPS Lng</label><input id="gpsLng" /></div>
+          </div>
+          <div class="field-group"><label for="speed">Ταχύτητα (km/h)</label><input id="speed" /></div>
+          <div class="row">
+            <label><input type="checkbox" id="brakeHard" /> Απότομο φρενάρισμα</label>
+            <label><input type="checkbox" id="accelHard" /> Απότομο γκάζι</label>
+            <label><input type="checkbox" id="cornerHard" /> Απότομη στροφή</label>
+          </div>
+          <div class="field-group">
+            <label for="weather">Καιρός</label>
+            <select id="weather"><option value="">—</option><option value="clear">Καθαρός</option><option value="rain">Βροχή</option><option value="snow">Χιόνι</option></select>
+          </div>
+          <div class="field-group"><label for="telemetryNotes">Σχόλιο</label><textarea id="telemetryNotes" rows="2"></textarea></div>
+          <button class="primary full" id="btnSendTelemetry">Αποστολή telemetry</button>
         </div>
       </div>
 
-      <div class="card">
+      <div id="profileScreen" class="card" style="display:none;">
         <div class="card-header">
-          <div class="card-title">Δρομολόγιο</div>
-          <div class="status-pill" id="tripStatus">
-            <strong>Off</strong> — δεν υπάρχει ενεργό
-          </div>
+          <div class="card-title">Profile & Wallet</div>
+          <button class="outline" id="btnCloseProfile">Πίσω</button>
         </div>
-
-        <div class="field-group">
-          <label for="tripOrigin">Αφετηρία</label>
-          <input id="tripOrigin" placeholder="π.χ. Πλατεία Αριστοτέλους" />
-        </div>
-
-        <div class="field-group">
-          <label for="tripDestination">Προορισμός</label>
-          <input id="tripDestination" placeholder="π.χ. Σταθμός Ν. Σιδηροδρόμου" />
-        </div>
-
-        <div class="field-group">
-          <label for="tripNotes">Σημειώσεις (προαιρετικό)</label>
-          <textarea id="tripNotes" rows="2" placeholder="Σχόλια για το ταξίδι..."></textarea>
-        </div>
-
-        <div class="row">
-          <button class="primary full" id="btnStartTrip">
-            <span class="dot"></span> Start
-          </button>
-          <button class="outline full" id="btnFinishTrip">
-            Finish
-          </button>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title">Telemetry (χειροκίνητο)</div>
-        </div>
-
-        <div class="row">
-          <div class="field-group">
-            <label for="gpsLat">GPS Lat</label>
-            <input id="gpsLat" placeholder="40.64" />
-          </div>
-          <div class="field-group">
-            <label for="gpsLng">GPS Lng</label>
-            <input id="gpsLng" placeholder="22.94" />
-          </div>
-        </div>
-
-        <div class="row">
-          <div class="field-group">
-            <label for="speed">Ταχύτητα (km/h)</label>
-            <input id="speed" placeholder="45" />
-          </div>
-        </div>
-
-        <div class="row">
-          <label><input type="checkbox" id="brakeHard" /> Απότομο φρενάρισμα</label>
-          <label><input type="checkbox" id="accelHard" /> Απότομο γκάζι</label>
-          <label><input type="checkbox" id="cornerHard" /> Απότομη στροφή</label>
-        </div>
-
-        <div class="field-group">
-          <label for="weather">Καιρός</label>
-          <select id="weather">
-            <option value="">—</option>
-            <option value="clear">Καθαρός</option>
-            <option value="rain">Βροχή</option>
-            <option value="snow">Χιόνι</option>
-          </select>
-        </div>
-
-        <div class="field-group">
-          <label for="telemetryNotes">Σχόλιο</label>
-          <textarea id="telemetryNotes" rows="2" placeholder="π.χ. εμπόδιο στο δρόμο..."></textarea>
-        </div>
-
-        <button class="primary full" id="btnSendTelemetry">Send telemetry</button>
-
-        <div class="small-text">
-          Αργότερα τα δεδομένα θα συνδέονται αυτόματα από το κινητό / OBD / IoT, τώρα είναι demo για το pilot.
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title">Voice / CB</div>
-        </div>
-
-        <button class="voice-button" id="voiceButton">
-          <div class="voice-dot" id="voiceDot"></div>
-          <div class="voice-text" id="voiceStatus">Πάτα •VOICE και μίλα για μήνυμα προς το κέντρο / ομάδα σου.</div>
-          <div class="voice-key">VOICE</div>
-        </button>
-
-        <div class="chip-row" style="margin-top: 8px;">
-          <div class="chip">Παράδειγμα: "Άνοιγμα δρομολογίου για αεροδρόμιο"</div>
-          <div class="chip">"Καθυστέρηση κίνησης Εγνατία"</div>
-          <div class="chip">"Επιβάτης για λιμάνι"</div>
-        </div>
-
-        <div class="small-text" style="margin-top: 8px;">
-          Η φωνή γίνεται κείμενο στο κινητό και στέλνεται ως event στο Thronos Driver Service.
-          Αργότερα θα μπαίνει και αυτόματο AI routing / CB chat.
-        </div>
-      </div>
-
-      <div class="footer">
-        Thronos Driver · Pilot build — data ready για Taxi, σχολές οδηγών & AI scoring.
+        <div class="field-group"><label>Τηλέφωνο</label><input id="profilePhone" readonly /></div>
+        <div class="field-group"><label for="profileName">Όνομα</label><input id="profileName" /></div>
+        <div class="field-group"><label>Role</label><input id="profileRole" readonly /></div>
+        <div class="field-group"><label for="walletAddress">Thronos Wallet Address</label><input id="walletAddress" placeholder="THR... ή 0x..." /></div>
+        <div class="field-group"><label for="tokenSymbol">Company Token Symbol</label><input id="tokenSymbol" placeholder="π.χ. TAXI" /></div>
+        <button class="primary full" id="btnSaveWallet">Αποθήκευση Wallet</button>
+        <div class="small-text" id="walletMessage"></div>
       </div>
     </div>
 

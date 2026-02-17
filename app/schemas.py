@@ -1,12 +1,14 @@
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional
 
 from pydantic import BaseModel, Field
 
 
 class DriverBase(BaseModel):
-    name: str = Field(..., example="Giorgos")
-    phone: Optional[str] = None
+    name: Optional[str] = Field(None, example="Giorgos")
+    phone: str
+    email: Optional[str] = None
+    role: str = "taxi"
     taxi_company: Optional[str] = None
     plate_number: Optional[str] = None
     notes: Optional[str] = None
@@ -18,6 +20,9 @@ class DriverCreate(DriverBase):
 
 class DriverRead(DriverBase):
     id: int
+    is_verified: int
+    wallet_address: Optional[str] = None
+    company_token_symbol: Optional[str] = None
 
     class Config:
         orm_mode = True
@@ -30,7 +35,7 @@ class TripBase(BaseModel):
 
 
 class TripStartRequest(TripBase):
-    driver_id: int
+    driver_id: Optional[int] = None
 
 
 class TripFinishRequest(BaseModel):
@@ -54,7 +59,7 @@ class TripRead(TripBase):
 
 
 class TelemetryCreate(BaseModel):
-    driver_id: int
+    driver_id: Optional[int] = None
     trip_id: Optional[int] = None
     latitude: Optional[float] = Field(None, example=40.6401)
     longitude: Optional[float] = Field(None, example=22.9444)
@@ -70,6 +75,7 @@ class TelemetryCreate(BaseModel):
 
 class TelemetryRead(TelemetryCreate):
     id: int
+    driver_id: int
     ts: datetime
 
     class Config:
@@ -77,7 +83,7 @@ class TelemetryRead(TelemetryCreate):
 
 
 class VoiceEventCreate(BaseModel):
-    driver_id: int
+    driver_id: Optional[int] = None
     trip_id: Optional[int] = None
     transcript: str
     intent_hint: Optional[str] = None
@@ -85,6 +91,7 @@ class VoiceEventCreate(BaseModel):
 
 class VoiceEventRead(VoiceEventCreate):
     id: int
+    driver_id: int
     ts: datetime
 
     class Config:
@@ -99,3 +106,20 @@ class DriverScore(BaseModel):
     harsh_ratio: float
     avg_speed_kmh: Optional[float]
     score_0_100: float
+
+
+class AuthRequestCode(BaseModel):
+    phone: str
+    email: Optional[str] = None
+    name: Optional[str] = None
+    role: Optional[str] = "taxi"
+
+
+class AuthVerifyCode(BaseModel):
+    phone: str
+    code: str
+
+
+class WalletLinkRequest(BaseModel):
+    wallet_address: str
+    company_token_symbol: Optional[str] = None
