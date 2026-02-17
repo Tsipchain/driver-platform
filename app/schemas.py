@@ -123,6 +123,7 @@ class AuthVerifyCode(BaseModel):
 class WalletLinkRequest(BaseModel):
     wallet_address: str
     company_token_symbol: Optional[str] = None
+    driver_id: Optional[int] = None
 
 
 class MeUpdateRequest(BaseModel):

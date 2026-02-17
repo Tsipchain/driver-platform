@@ -50,29 +50,89 @@ def mask_value(email: Optional[str], phone: str) -> str:
     return "***"
 
 
+def is_production_env() -> bool:
+    return (os.getenv("DRIVER_ENV") or "").strip().lower() == "production"
+
+
+def generate_otp_code() -> str:
+    fixed = os.getenv("DRIVER_DEV_FIXED_OTP")
+    if fixed:
+        fixed_clean = fixed.strip()
+        if len(fixed_clean) == 6 and fixed_clean.isdigit():
+            return fixed_clean
+        logger.warning("DRIVER_DEV_FIXED_OTP is set but invalid; expected 6 digits")
+
+    return str(secrets.randbelow(900000) + 100000)
+
+
+def _smtp_from() -> Optional[str]:
+    return os.getenv("DRIVER_SMTP_FROM") or os.getenv("DRIVER_EMAIL_FROM")
+
+
 def _smtp_configured() -> bool:
-    required = ["DRIVER_SMTP_HOST", "DRIVER_SMTP_PORT", "DRIVER_SMTP_USER", "DRIVER_SMTP_PASSWORD", "DRIVER_EMAIL_FROM"]
-    return all(os.getenv(key) for key in required)
+    required = ["DRIVER_SMTP_HOST", "DRIVER_SMTP_PORT", "DRIVER_SMTP_USER", "DRIVER_SMTP_PASSWORD"]
+    return all(os.getenv(key) for key in required) and bool(_smtp_from())
 
 
-def send_code_via_email(email: str, code: str) -> bool:
+def send_code_via_email(email: str, code: str, name_or_phone: str) -> bool:
     if not _smtp_configured() or not email:
         return False
 
+    smtp_host = os.getenv("DRIVER_SMTP_HOST")
+    smtp_port = int(os.getenv("DRIVER_SMTP_PORT", "465"))
+    smtp_user = os.getenv("DRIVER_SMTP_USER")
+    smtp_password = os.getenv("DRIVER_SMTP_PASSWORD")
+    smtp_from = _smtp_from()
+    smtp_timeout = int(os.getenv("DRIVER_SMTP_TIMEOUT", "10"))
+    smtp_use_ssl = (os.getenv("DRIVER_SMTP_USE_SSL") or "").strip().lower() in {"1", "true", "yes"}
+
     msg = EmailMessage()
-    msg["Subject"] = "Your Driver login code"
-    msg["From"] = os.getenv("DRIVER_EMAIL_FROM")
+    msg["Subject"] = "[Thronos Driver] Κωδικός σύνδεσης / Login code"
+    msg["From"] = smtp_from
     msg["To"] = email
-    msg.set_content(f"Your 6-digit driver login code is: {code}\nIt expires in 10 minutes.")
+    msg.set_content(
+        f"""Γεια σου {name_or_phone},
+
+Ο κωδικός σύνδεσης για την πλατφόρμα Thronos Driver είναι:
+
+    {code}
+
+Ο κωδικός ισχύει μόνο για λίγα λεπτά και μπορεί να χρησιμοποιηθεί μία φορά
+για να συνδεθείς από αυτή τη συσκευή.
+
+Αν δεν ζήτησες εσύ αυτόν τον κωδικό, μπορείς να αγνοήσεις αυτό το μήνυμα.
+
+
+Hi {name_or_phone},
+
+Your login code for the Thronos Driver platform is:
+
+    {code}
+
+This code is valid only for a few minutes and can be used once to sign in
+from this device.
+
+If you did not request this code, you can safely ignore this email.
+
+— Thronos Driver
+"""
+    )
 
     try:
-        with smtplib.SMTP(os.getenv("DRIVER_SMTP_HOST"), int(os.getenv("DRIVER_SMTP_PORT", "587"))) as server:
-            server.starttls()
-            server.login(os.getenv("DRIVER_SMTP_USER"), os.getenv("DRIVER_SMTP_PASSWORD"))
-            server.send_message(msg)
+        if smtp_use_ssl:
+            with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=smtp_timeout) as server:
+                server.login(smtp_user, smtp_password)
+                server.send_message(msg)
+        else:
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=smtp_timeout) as server:
+                server.starttls()
+                server.login(smtp_user, smtp_password)
+                server.send_message(msg)
+
+        logger.info("OTP email sent to %s", email)
         return True
     except Exception:
-        logger.exception("Failed to send verification email")
+        logger.exception("Failed to send OTP email to %s", email)
         return False
 
 
@@ -145,21 +205,29 @@ def request_code(req: schemas.AuthRequestCode, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Invalid phone")
 
     driver = crud.get_or_create_driver_by_phone(db, phone=phone, email=req.email, name=req.name, role=req.role)
-    code = f"{secrets.randbelow(1000000):06d}"
+    code = generate_otp_code()
     driver.verification_code = code
     driver.verification_expires_at = datetime.utcnow() + timedelta(minutes=10)
     driver.failed_attempts = 0
 
     delivery = "log"
     channel = "sms"
-    if req.email:
-        if send_code_via_email(req.email, code):
+    recipient_name = (req.name or driver.name or phone).strip()
+
+    if req.email and _smtp_configured():
+        if send_code_via_email(req.email, code, recipient_name):
             delivery = "email"
             channel = "email"
         else:
+            logger.warning("OTP delivery fell back to log-only mode for %s", req.email)
+    elif req.email and not _smtp_configured():
+        logger.warning("SMTP not configured; falling back to log-only OTP mode for %s", req.email)
+
+    if delivery == "log":
+        if is_production_env():
+            logger.warning("OTP created in log-only mode for phone=%s", phone)
+        else:
             logger.info("[DEV] login code for %s is %s", phone, code)
-    else:
-        logger.info("[DEV] login code for %s is %s", phone, code)
 
     driver.verification_channel = channel
     db.commit()
@@ -228,24 +296,44 @@ def me_update(req: schemas.MeUpdateRequest, current_driver: Driver = Depends(get
 
 
 @app.post("/api/wallet/link")
-def wallet_link(req: schemas.WalletLinkRequest, current_driver: Driver = Depends(get_current_driver), db: Session = Depends(get_db)):
+def wallet_link(
+    req: schemas.WalletLinkRequest,
+    current_driver: Optional[Driver] = Depends(get_current_driver_optional),
+    db: Session = Depends(get_db),
+):
     wallet = req.wallet_address.strip()
     if not wallet or len(wallet) < 6 or len(wallet) > 128:
         raise HTTPException(status_code=400, detail="Invalid wallet address")
     if wallet.upper().startswith("THR") is False and not wallet.startswith("0x"):
         raise HTTPException(status_code=400, detail="Invalid wallet address")
 
-    current_driver.wallet_address = wallet
-    current_driver.company_token_symbol = req.company_token_symbol.strip() if req.company_token_symbol else None
+    target_driver = current_driver
+    if not target_driver and req.driver_id:
+        target_driver = crud.get_driver(db, req.driver_id)
+
+    if not target_driver:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    target_driver.wallet_address = wallet
+    target_driver.company_token_symbol = req.company_token_symbol.strip() if req.company_token_symbol else None
     db.commit()
     return {"ok": True}
 
 
 @app.get("/api/wallet")
-def wallet_get(current_driver: Driver = Depends(get_current_driver)):
+def wallet_get(
+    driver_id: Optional[int] = None,
+    current_driver: Optional[Driver] = Depends(get_current_driver_optional),
+    db: Session = Depends(get_db),
+):
+    target_driver = current_driver
+    if not target_driver and driver_id:
+        target_driver = crud.get_driver(db, driver_id)
+    if not target_driver:
+        raise HTTPException(status_code=401, detail="Unauthorized")
     return {
-        "wallet_address": current_driver.wallet_address,
-        "company_token_symbol": current_driver.company_token_symbol,
+        "wallet_address": target_driver.wallet_address,
+        "company_token_symbol": target_driver.company_token_symbol,
     }
 
 
