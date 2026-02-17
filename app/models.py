@@ -1,0 +1,77 @@
+from datetime import datetime
+
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy.orm import relationship
+
+from .db import Base
+
+
+class Driver(Base):
+    __tablename__ = "drivers"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(120), nullable=False)
+    phone = Column(String(64), nullable=True)
+    taxi_company = Column(String(128), nullable=True)
+    plate_number = Column(String(32), nullable=True)
+    notes = Column(Text, nullable=True)
+
+    trips = relationship("Trip", back_populates="driver", cascade="all, delete-orphan")
+    telemetry_events = relationship("TelemetryEvent", back_populates="driver", cascade="all, delete-orphan")
+    voice_events = relationship("VoiceEvent", back_populates="driver", cascade="all, delete-orphan")
+
+
+class Trip(Base):
+    __tablename__ = "trips"
+
+    id = Column(Integer, primary_key=True, index=True)
+    driver_id = Column(Integer, ForeignKey("drivers.id"), nullable=False, index=True)
+    started_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    finished_at = Column(DateTime, nullable=True)
+    origin = Column(String(255), nullable=True)
+    destination = Column(String(255), nullable=True)
+    distance_km = Column(Float, nullable=True)
+    avg_speed_kmh = Column(Float, nullable=True)
+    safety_score = Column(Float, nullable=True)
+    notes = Column(Text, nullable=True)
+
+    driver = relationship("Driver", back_populates="trips")
+    telemetry_events = relationship("TelemetryEvent", back_populates="trip", cascade="all, delete-orphan")
+
+
+class TelemetryEvent(Base):
+    __tablename__ = "telemetry_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    driver_id = Column(Integer, ForeignKey("drivers.id"), nullable=False, index=True)
+    trip_id = Column(Integer, ForeignKey("trips.id"), nullable=True, index=True)
+
+    ts = Column(DateTime, default=datetime.utcnow, nullable=False)
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
+    speed_kmh = Column(Float, nullable=True)
+    accel = Column(Float, nullable=True)
+    brake_hard = Column(Boolean, default=False, nullable=False)
+    accel_hard = Column(Boolean, default=False, nullable=False)
+    cornering_hard = Column(Boolean, default=False, nullable=False)
+    road_type = Column(String(64), nullable=True)
+    weather = Column(String(64), nullable=True)
+    raw_notes = Column(Text, nullable=True)
+
+    driver = relationship("Driver", back_populates="telemetry_events")
+    trip = relationship("Trip", back_populates="telemetry_events")
+
+
+class VoiceEvent(Base):
+    __tablename__ = "voice_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    driver_id = Column(Integer, ForeignKey("drivers.id"), nullable=False, index=True)
+    trip_id = Column(Integer, ForeignKey("trips.id"), nullable=True, index=True)
+
+    ts = Column(DateTime, default=datetime.utcnow, nullable=False)
+    transcript = Column(Text, nullable=False)
+    intent_hint = Column(String(64), nullable=True)
+
+    driver = relationship("Driver", back_populates="voice_events")
+    trip = relationship("Trip")
