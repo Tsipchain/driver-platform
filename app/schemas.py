@@ -25,7 +25,7 @@ class DriverRead(DriverBase):
     company_token_symbol: Optional[str] = None
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 class TripBase(BaseModel):
@@ -55,7 +55,7 @@ class TripRead(TripBase):
     safety_score: Optional[float] = None
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 class TelemetryCreate(BaseModel):
@@ -79,7 +79,7 @@ class TelemetryRead(TelemetryCreate):
     ts: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 class VoiceEventCreate(BaseModel):
@@ -95,7 +95,7 @@ class VoiceEventRead(VoiceEventCreate):
     ts: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 class DriverScore(BaseModel):
@@ -123,3 +123,7 @@ class AuthVerifyCode(BaseModel):
 class WalletLinkRequest(BaseModel):
     wallet_address: str
     company_token_symbol: Optional[str] = None
+
+
+class MeUpdateRequest(BaseModel):
+    name: Optional[str] = None

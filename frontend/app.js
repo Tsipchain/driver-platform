@@ -20,14 +20,15 @@ function clearSession() {
 }
 
 async function apiFetch(path, options = {}) {
-  const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+  const { skipUnauthorizedRedirect = false, ...fetchOptions } = options;
+  const headers = { "Content-Type": "application/json", ...(fetchOptions.headers || {}) };
   const token = getToken();
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
 
-  const resp = await fetch(`${API_BASE}${path}`, { ...options, headers });
-  if (resp.status === 401) {
+  const resp = await fetch(`${API_BASE}${path}`, { ...fetchOptions, headers });
+  if (resp.status === 401 && !skipUnauthorizedRedirect) {
     clearSession();
     renderAuthState();
     throw new Error("Unauthorized");
@@ -59,7 +60,11 @@ async function requestCode() {
     role: "taxi",
   };
 
-  const resp = await apiFetch("/api/auth/request-code", { method: "POST", body: JSON.stringify(payload) });
+  const resp = await apiFetch("/api/auth/request-code", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    skipUnauthorizedRedirect: true,
+  });
   if (!resp.ok) {
     $("authMessage").textContent = "Αποτυχία αποστολής κωδικού.";
     return;
@@ -76,7 +81,11 @@ async function verifyCode() {
     code: $("loginCode").value.trim(),
   };
 
-  const resp = await apiFetch("/api/auth/verify-code", { method: "POST", body: JSON.stringify(payload) });
+  const resp = await apiFetch("/api/auth/verify-code", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    skipUnauthorizedRedirect: true,
+  });
   if (!resp.ok) {
     $("authMessage").textContent = "Λάθος ή ληγμένος κωδικός.";
     return;
@@ -182,6 +191,12 @@ async function saveWallet() {
   const profile = JSON.parse(localStorage.getItem("driverProfile") || "{}");
   profile.name = $("profileName").value.trim() || null;
   localStorage.setItem("driverProfile", JSON.stringify(profile));
+
+  await apiFetch("/api/me", {
+    method: "POST",
+    body: JSON.stringify({ name: profile.name }),
+  });
+
   $("walletMessage").textContent = "Το wallet αποθηκεύτηκε.";
   updateHeaderProfile();
 }

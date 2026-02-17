@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
-from . import crud, schemas
+from . import crud, models, schemas
 from .db import SessionLocal, init_db
 from .models import Driver
 
@@ -92,6 +92,28 @@ def get_current_driver(
     if not driver:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
+    crud.touch_session(db, session)
+    return driver
+
+
+def get_current_driver_optional(
+    authorization: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+) -> Optional[Driver]:
+    if not authorization:
+        return None
+    if not authorization.startswith("Bearer "):
+        return None
+
+    token = authorization.split(" ", 1)[1].strip()
+    if not token:
+        return None
+    session = crud.get_session_by_token(db, token)
+    if not session:
+        return None
+    driver = crud.get_driver(db, session.driver_id)
+    if not driver:
+        return None
     crud.touch_session(db, session)
     return driver
 
@@ -197,6 +219,14 @@ def me(current_driver: Driver = Depends(get_current_driver), db: Session = Depen
     }
 
 
+@app.post("/api/me")
+def me_update(req: schemas.MeUpdateRequest, current_driver: Driver = Depends(get_current_driver), db: Session = Depends(get_db)):
+    if req.name is not None:
+        current_driver.name = req.name.strip() or None
+        db.commit()
+    return {"ok": True, "name": current_driver.name}
+
+
 @app.post("/api/wallet/link")
 def wallet_link(req: schemas.WalletLinkRequest, current_driver: Driver = Depends(get_current_driver), db: Session = Depends(get_db)):
     wallet = req.wallet_address.strip()
@@ -234,36 +264,86 @@ def api_create_driver(driver: schemas.DriverCreate, db: Session = Depends(get_db
 
 
 @app.post("/api/v1/trips/start", response_model=schemas.TripRead)
-def api_start_trip(req: schemas.TripStartRequest, current_driver: Driver = Depends(get_current_driver), db: Session = Depends(get_db)):
-    return crud.start_trip(db, req, driver_id=current_driver.id)
+def api_start_trip(
+    req: schemas.TripStartRequest,
+    current_driver: Optional[Driver] = Depends(get_current_driver_optional),
+    db: Session = Depends(get_db),
+):
+    resolved_driver_id = current_driver.id if current_driver else req.driver_id
+    if not resolved_driver_id or not crud.get_driver(db, int(resolved_driver_id)):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return crud.start_trip(db, req, driver_id=int(resolved_driver_id))
 
 
 @app.post("/api/v1/trips/{trip_id}/finish", response_model=schemas.TripRead)
-def api_finish_trip(trip_id: int, req: schemas.TripFinishRequest, current_driver: Driver = Depends(get_current_driver), db: Session = Depends(get_db)):
-    trip = crud.finish_trip(db, trip_id, req, driver_id=current_driver.id)
+def api_finish_trip(
+    trip_id: int,
+    req: schemas.TripFinishRequest,
+    current_driver: Optional[Driver] = Depends(get_current_driver_optional),
+    db: Session = Depends(get_db),
+):
+    if current_driver:
+        driver_id = current_driver.id
+    else:
+        trip = db.query(models.Trip).filter(models.Trip.id == trip_id).first()
+        if not trip:
+            raise HTTPException(status_code=404, detail="Trip not found")
+        driver_id = trip.driver_id
+
+    trip = crud.finish_trip(db, trip_id, req, driver_id=driver_id)
     if not trip:
         raise HTTPException(status_code=404, detail="Trip not found")
     return trip
 
 
 @app.post("/api/v1/telemetry", response_model=schemas.TelemetryRead)
-def api_create_telemetry(req: schemas.TelemetryCreate, current_driver: Driver = Depends(get_current_driver), db: Session = Depends(get_db)):
-    return crud.create_telemetry(db, req, driver_id=current_driver.id)
+def api_create_telemetry(
+    req: schemas.TelemetryCreate,
+    current_driver: Optional[Driver] = Depends(get_current_driver_optional),
+    db: Session = Depends(get_db),
+):
+    resolved_driver_id = current_driver.id if current_driver else req.driver_id
+    if not resolved_driver_id or not crud.get_driver(db, int(resolved_driver_id)):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return crud.create_telemetry(db, req, driver_id=int(resolved_driver_id))
 
 
 @app.get("/api/v1/telemetry", response_model=List[schemas.TelemetryRead])
-def api_list_telemetry(limit: int = 100, current_driver: Driver = Depends(get_current_driver), db: Session = Depends(get_db)):
-    return crud.list_telemetry_for_driver(db, driver_id=current_driver.id, limit=min(limit, 500))
+def api_list_telemetry(
+    driver_id: Optional[int] = None,
+    limit: int = 100,
+    current_driver: Optional[Driver] = Depends(get_current_driver_optional),
+    db: Session = Depends(get_db),
+):
+    resolved_driver_id = current_driver.id if current_driver else driver_id
+    if not resolved_driver_id:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return crud.list_telemetry_for_driver(db, driver_id=resolved_driver_id, limit=min(limit, 500))
 
 
 @app.post("/api/v1/voice-events", response_model=schemas.VoiceEventRead)
-def api_create_voice_event(req: schemas.VoiceEventCreate, current_driver: Driver = Depends(get_current_driver), db: Session = Depends(get_db)):
-    return crud.create_voice_event(db, req, driver_id=current_driver.id)
+def api_create_voice_event(
+    req: schemas.VoiceEventCreate,
+    current_driver: Optional[Driver] = Depends(get_current_driver_optional),
+    db: Session = Depends(get_db),
+):
+    resolved_driver_id = current_driver.id if current_driver else req.driver_id
+    if not resolved_driver_id or not crud.get_driver(db, int(resolved_driver_id)):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return crud.create_voice_event(db, req, driver_id=int(resolved_driver_id))
 
 
 @app.get("/api/v1/voice-events", response_model=List[schemas.VoiceEventRead])
-def api_list_voice_events(limit: int = 100, current_driver: Driver = Depends(get_current_driver), db: Session = Depends(get_db)):
-    return crud.list_voice_events_for_driver(db, driver_id=current_driver.id, limit=min(limit, 500))
+def api_list_voice_events(
+    driver_id: Optional[int] = None,
+    limit: int = 100,
+    current_driver: Optional[Driver] = Depends(get_current_driver_optional),
+    db: Session = Depends(get_db),
+):
+    resolved_driver_id = current_driver.id if current_driver else driver_id
+    if not resolved_driver_id:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return crud.list_voice_events_for_driver(db, driver_id=resolved_driver_id, limit=min(limit, 500))
 
 
 @app.get("/api/v1/score/driver/{driver_id}", response_model=schemas.DriverScore)
