@@ -1,23 +1,25 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import List, Optional, Tuple
 
-from sqlalchemy import func, case
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from . import models, schemas
-
-
-# Drivers --------------------------------------------------------------------
 
 
 def create_driver(db: Session, driver: schemas.DriverCreate) -> models.Driver:
     obj = models.Driver(
         name=driver.name,
         phone=driver.phone,
+        email=driver.email,
+        role=driver.role,
         taxi_company=driver.taxi_company,
         plate_number=driver.plate_number,
         notes=driver.notes,
+        company_name=driver.company_name,
+        group_tag=driver.group_tag,
     )
     db.add(obj)
     db.commit()
@@ -33,27 +35,73 @@ def get_driver(db: Session, driver_id: int) -> Optional[models.Driver]:
     return db.query(models.Driver).filter(models.Driver.id == driver_id).first()
 
 
-# Trips ----------------------------------------------------------------------
+def get_driver_by_phone(db: Session, phone: str) -> Optional[models.Driver]:
+    return db.query(models.Driver).filter(models.Driver.phone == phone).first()
 
 
-def start_trip(db: Session, req: schemas.TripStartRequest) -> models.Trip:
-    trip = models.Trip(
-        driver_id=req.driver_id,
-        origin=req.origin,
-        destination=req.destination,
-        notes=req.notes,
+def get_or_create_driver_by_phone(
+    db: Session,
+    phone: str,
+    email: Optional[str] = None,
+    name: Optional[str] = None,
+    role: Optional[str] = "taxi",
+) -> models.Driver:
+    driver = get_driver_by_phone(db, phone)
+    if driver:
+        if email and not driver.email:
+            driver.email = email
+        if name and not driver.name:
+            driver.name = name
+        if role:
+            driver.role = role
+        if email:
+            driver.email = email
+        db.commit()
+        db.refresh(driver)
+        return driver
+
+    driver = models.Driver(
+        phone=phone,
+        email=email,
+        name=name,
+        role=role or "taxi",
+        created_at=datetime.utcnow(),
     )
+    db.add(driver)
+    db.commit()
+    db.refresh(driver)
+    return driver
+
+
+def create_session_token(db: Session, driver_id: int, token: str) -> models.SessionToken:
+    session = models.SessionToken(driver_id=driver_id, token=token, created_at=datetime.utcnow(), last_seen_at=datetime.utcnow())
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return session
+
+
+def get_session_by_token(db: Session, token: str) -> Optional[models.SessionToken]:
+    return db.query(models.SessionToken).filter(models.SessionToken.token == token).first()
+
+
+def touch_session(db: Session, session: models.SessionToken) -> None:
+    session.last_seen_at = datetime.utcnow()
+    db.commit()
+
+
+def start_trip(db: Session, req: schemas.TripStartRequest, driver_id: int) -> models.Trip:
+    trip = models.Trip(driver_id=driver_id, origin=req.origin, destination=req.destination, notes=req.notes)
     db.add(trip)
     db.commit()
     db.refresh(trip)
     return trip
 
 
-def finish_trip(db: Session, trip_id: int, req: schemas.TripFinishRequest) -> Optional[models.Trip]:
-    trip = db.query(models.Trip).filter(models.Trip.id == trip_id).first()
+def finish_trip(db: Session, trip_id: int, req: schemas.TripFinishRequest, driver_id: int) -> Optional[models.Trip]:
+    trip = db.query(models.Trip).filter(models.Trip.id == trip_id, models.Trip.driver_id == driver_id).first()
     if not trip:
         return None
-    from datetime import datetime
 
     trip.finished_at = datetime.utcnow()
     if req.distance_km is not None:
@@ -69,12 +117,9 @@ def finish_trip(db: Session, trip_id: int, req: schemas.TripFinishRequest) -> Op
     return trip
 
 
-# Telemetry ------------------------------------------------------------------
-
-
-def create_telemetry(db: Session, req: schemas.TelemetryCreate) -> models.TelemetryEvent:
+def create_telemetry(db: Session, req: schemas.TelemetryCreate, driver_id: int) -> models.TelemetryEvent:
     ev = models.TelemetryEvent(
-        driver_id=req.driver_id,
+        driver_id=driver_id,
         trip_id=req.trip_id,
         latitude=req.latitude,
         longitude=req.longitude,
@@ -93,11 +138,7 @@ def create_telemetry(db: Session, req: schemas.TelemetryCreate) -> models.Teleme
     return ev
 
 
-def list_telemetry_for_driver(
-    db: Session,
-    driver_id: int,
-    limit: int = 100,
-) -> List[models.TelemetryEvent]:
+def list_telemetry_for_driver(db: Session, driver_id: int, limit: int = 100) -> List[models.TelemetryEvent]:
     q = (
         db.query(models.TelemetryEvent)
         .filter(models.TelemetryEvent.driver_id == driver_id)
@@ -107,27 +148,15 @@ def list_telemetry_for_driver(
     return list(q)
 
 
-# Voice events ---------------------------------------------------------------
-
-
-def create_voice_event(db: Session, req: schemas.VoiceEventCreate) -> models.VoiceEvent:
-    ev = models.VoiceEvent(
-        driver_id=req.driver_id,
-        trip_id=req.trip_id,
-        transcript=req.transcript,
-        intent_hint=req.intent_hint,
-    )
+def create_voice_event(db: Session, req: schemas.VoiceEventCreate, driver_id: int) -> models.VoiceEvent:
+    ev = models.VoiceEvent(driver_id=driver_id, trip_id=req.trip_id, transcript=req.transcript, intent_hint=req.intent_hint)
     db.add(ev)
     db.commit()
     db.refresh(ev)
     return ev
 
 
-def list_voice_events_for_driver(
-    db: Session,
-    driver_id: int,
-    limit: int = 100,
-) -> List[models.VoiceEvent]:
+def list_voice_events_for_driver(db: Session, driver_id: int, limit: int = 100) -> List[models.VoiceEvent]:
     q = (
         db.query(models.VoiceEvent)
         .filter(models.VoiceEvent.driver_id == driver_id)
@@ -137,11 +166,15 @@ def list_voice_events_for_driver(
     return list(q)
 
 
-# Scoring --------------------------------------------------------------------
+def count_driver_trips(db: Session, driver_id: int) -> int:
+    return db.query(models.Trip).filter(models.Trip.driver_id == driver_id).count()
+
+
+def count_driver_telemetry(db: Session, driver_id: int) -> int:
+    return db.query(models.TelemetryEvent).filter(models.TelemetryEvent.driver_id == driver_id).count()
 
 
 def compute_driver_score(db: Session, driver_id: int) -> Tuple[int, int, int, float, Optional[float], float]:
-    """Return (total_trips, total_events, harsh_events, harsh_ratio, avg_speed, score_0_100)."""
     total_trips = db.query(models.Trip).filter(models.Trip.driver_id == driver_id).count()
 
     total_events, harsh_events, avg_speed = db.query(
@@ -166,15 +199,146 @@ def compute_driver_score(db: Session, driver_id: int) -> Tuple[int, int, int, fl
 
     harsh_ratio = float(harsh_events) / float(total_events) if total_events > 0 else 0.0
 
-    # Simple heuristic: start from 100, subtract penalty for harsh ratio and overspeeding
     score = 100.0
-    score -= harsh_ratio * 40.0  # up to -40 points
+    score -= harsh_ratio * 40.0
     if avg_speed is not None and avg_speed > 55:
-        score -= min((avg_speed - 55.0) * 0.5, 30.0)  # up to -30 for high average speed
+        score -= min((avg_speed - 55.0) * 0.5, 30.0)
 
-    if score < 0:
-        score = 0.0
-    if score > 100:
-        score = 100.0
-
+    score = max(0.0, min(score, 100.0))
     return total_trips, total_events, harsh_events, harsh_ratio, avg_speed, score
+
+
+def create_voice_message(
+    db: Session,
+    driver_id: int,
+    file_path: str,
+    trip_id: Optional[int] = None,
+    duration_sec: Optional[float] = None,
+    target: Optional[str] = None,
+    note: Optional[str] = None,
+    status: str = "received",
+) -> models.VoiceMessage:
+    msg = models.VoiceMessage(
+        driver_id=driver_id,
+        trip_id=trip_id,
+        file_path=file_path,
+        duration_sec=duration_sec,
+        target=target,
+        note=note,
+        status=status,
+        created_at=datetime.utcnow(),
+    )
+    db.add(msg)
+    db.commit()
+    db.refresh(msg)
+    return msg
+
+
+def list_recent_voice_messages(db: Session, limit: int = 20) -> List[models.VoiceMessage]:
+    return (
+        db.query(models.VoiceMessage)
+        .order_by(models.VoiceMessage.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+def get_operator_dashboard(db: Session, group_tag: Optional[str] = None) -> dict:
+    q = db.query(models.Driver)
+    if group_tag:
+        q = q.filter(models.Driver.group_tag == group_tag)
+    drivers = q.order_by(models.Driver.id.desc()).all()
+
+    items = []
+    active_count = 0
+    for d in drivers:
+        last_trip = (
+            db.query(models.Trip)
+            .filter(models.Trip.driver_id == d.id)
+            .order_by(models.Trip.started_at.desc())
+            .first()
+        )
+        if not last_trip:
+            last_trip_status = "none"
+        elif last_trip.finished_at is None:
+            last_trip_status = "active"
+            active_count += 1
+        else:
+            last_trip_status = "completed"
+
+        last_tel = (
+            db.query(models.TelemetryEvent)
+            .filter(models.TelemetryEvent.driver_id == d.id)
+            .order_by(models.TelemetryEvent.ts.desc())
+            .first()
+        )
+        last_event = None
+        if last_tel and (last_tel.brake_hard or last_tel.accel_hard or last_tel.cornering_hard):
+            flags = []
+            if last_tel.brake_hard:
+                flags.append("brake_hard")
+            if last_tel.accel_hard:
+                flags.append("accel_hard")
+            if last_tel.cornering_hard:
+                flags.append("cornering_hard")
+            last_event = {"type": "telemetry_flag", "flags": flags, "timestamp": last_tel.ts}
+
+        items.append(
+            {
+                "id": d.id,
+                "name": d.name,
+                "phone": d.phone,
+                "company_name": d.company_name,
+                "group_tag": d.group_tag,
+                "last_trip_status": last_trip_status,
+                "last_telemetry": (
+                    {
+                        "lat": last_tel.latitude,
+                        "lng": last_tel.longitude,
+                        "speed": last_tel.speed_kmh,
+                        "timestamp": last_tel.ts,
+                    }
+                    if last_tel
+                    else None
+                ),
+                "last_event": last_event,
+            }
+        )
+
+    return {"active_drivers": active_count, "drivers": items}
+
+
+def get_recent_operator_events(db: Session, group_tag: Optional[str] = None, limit: int = 50) -> List[dict]:
+    q = db.query(models.TelemetryEvent, models.Driver).join(models.Driver, models.Driver.id == models.TelemetryEvent.driver_id)
+    if group_tag:
+        q = q.filter(models.Driver.group_tag == group_tag)
+    q = q.filter(
+        (models.TelemetryEvent.brake_hard == True)
+        | (models.TelemetryEvent.accel_hard == True)
+        | (models.TelemetryEvent.cornering_hard == True)
+    )
+    rows = q.order_by(models.TelemetryEvent.ts.desc()).limit(limit).all()
+
+    events = []
+    for tel, drv in rows:
+        flags = []
+        if tel.brake_hard:
+            flags.append("brake_hard")
+        if tel.accel_hard:
+            flags.append("accel_hard")
+        if tel.cornering_hard:
+            flags.append("cornering_hard")
+        events.append(
+            {
+                "driver_id": drv.id,
+                "driver_name": drv.name,
+                "group_tag": drv.group_tag,
+                "trip_id": tel.trip_id,
+                "flags": flags,
+                "speed_kmh": tel.speed_kmh,
+                "latitude": tel.latitude,
+                "longitude": tel.longitude,
+                "timestamp": tel.ts,
+            }
+        )
+    return events
