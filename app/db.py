@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 Base = declarative_base()
@@ -11,17 +11,10 @@ def _build_sqlite_url_from_path(path_str: str) -> str:
     path = Path(path_str)
     if path.parent and not path.parent.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-    # Absolute path is recommended inside containers
     return f"sqlite:///{path}"
 
 
 def get_database_url() -> str:
-    """Resolve database URL with precedence:
-
-    1. DRIVER_DB_URL (full SQLAlchemy URL, e.g. PostgreSQL)
-    2. DRIVER_DB_PATH (path to SQLite file)
-    3. Default ./data/driver_service.db (SQLite)
-    """
     url = os.getenv("DRIVER_DB_URL")
     if url:
         return url
@@ -30,7 +23,6 @@ def get_database_url() -> str:
     if path:
         return _build_sqlite_url_from_path(path)
 
-    # default: ./data/driver_service.db
     default_path = Path("data") / "driver_service.db"
     return _build_sqlite_url_from_path(str(default_path))
 
@@ -45,8 +37,50 @@ engine = create_engine(
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
+def _table_columns(conn, table_name: str) -> set[str]:
+    rows = conn.execute(text(f"PRAGMA table_info({table_name})"))
+    return {row[1] for row in rows}
+
+
+def _run_sqlite_migrations() -> None:
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE IF NOT EXISTS sessions (id INTEGER PRIMARY KEY, driver_id INTEGER NOT NULL, token TEXT NOT NULL UNIQUE, created_at DATETIME NOT NULL, last_seen_at DATETIME NOT NULL, FOREIGN KEY(driver_id) REFERENCES drivers(id))"))
+
+        driver_columns = _table_columns(conn, "drivers")
+        alterations = {
+            "phone": "ALTER TABLE drivers ADD COLUMN phone TEXT",
+            "email": "ALTER TABLE drivers ADD COLUMN email TEXT",
+            "name": "ALTER TABLE drivers ADD COLUMN name TEXT",
+            "role": "ALTER TABLE drivers ADD COLUMN role TEXT NOT NULL DEFAULT 'taxi'",
+            "is_verified": "ALTER TABLE drivers ADD COLUMN is_verified INTEGER NOT NULL DEFAULT 0",
+            "wallet_address": "ALTER TABLE drivers ADD COLUMN wallet_address TEXT",
+            "company_token_symbol": "ALTER TABLE drivers ADD COLUMN company_token_symbol TEXT",
+            "verification_code": "ALTER TABLE drivers ADD COLUMN verification_code TEXT",
+            "verification_expires_at": "ALTER TABLE drivers ADD COLUMN verification_expires_at DATETIME",
+            "verification_channel": "ALTER TABLE drivers ADD COLUMN verification_channel TEXT",
+            "failed_attempts": "ALTER TABLE drivers ADD COLUMN failed_attempts INTEGER NOT NULL DEFAULT 0",
+            "created_at": "ALTER TABLE drivers ADD COLUMN created_at DATETIME",
+            "last_login_at": "ALTER TABLE drivers ADD COLUMN last_login_at DATETIME",
+            "last_code_sent_at": "ALTER TABLE drivers ADD COLUMN last_code_sent_at DATETIME",
+            "taxi_company": "ALTER TABLE drivers ADD COLUMN taxi_company TEXT",
+            "plate_number": "ALTER TABLE drivers ADD COLUMN plate_number TEXT",
+            "notes": "ALTER TABLE drivers ADD COLUMN notes TEXT",
+        }
+        for col, ddl in alterations.items():
+            if col not in driver_columns:
+                conn.execute(text(ddl))
+
+        conn.execute(text("UPDATE drivers SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"))
+        conn.execute(text("UPDATE drivers SET role = 'taxi' WHERE role IS NULL OR role = ''"))
+        conn.execute(text("UPDATE drivers SET phone = '+30' || printf('%09d', id) WHERE phone IS NULL OR phone = ''"))
+
+        conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_drivers_phone ON drivers(phone)"))
+        conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_sessions_token ON sessions(token)"))
+
+
 def init_db() -> None:
-    """Create all tables if they do not exist."""
     from . import models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
+    if DATABASE_URL.startswith("sqlite"):
+        _run_sqlite_migrations()

@@ -1,106 +1,169 @@
 const API_BASE = window.location.origin;
 
+
+let requestCodeCooldownTimer = null;
+let requestCodeCooldownLeft = 0;
+
+function updateRequestCodeButton() {
+  const btn = $("btnSendCode");
+  if (!btn) return;
+  if (requestCodeCooldownLeft > 0) {
+    btn.disabled = true;
+    btn.textContent = `Αποστολή ξανά σε ${requestCodeCooldownLeft}s`;
+  } else {
+    btn.disabled = false;
+    btn.textContent = "Αποστολή κωδικού";
+  }
+}
+
+function startRequestCodeCooldown(seconds) {
+  if (requestCodeCooldownTimer) {
+    clearInterval(requestCodeCooldownTimer);
+    requestCodeCooldownTimer = null;
+  }
+
+  requestCodeCooldownLeft = Math.max(0, Number(seconds) || 0);
+  updateRequestCodeButton();
+
+  if (requestCodeCooldownLeft <= 0) {
+    return;
+  }
+
+  requestCodeCooldownTimer = setInterval(() => {
+    requestCodeCooldownLeft = Math.max(0, requestCodeCooldownLeft - 1);
+    updateRequestCodeButton();
+    if (requestCodeCooldownLeft === 0 && requestCodeCooldownTimer) {
+      clearInterval(requestCodeCooldownTimer);
+      requestCodeCooldownTimer = null;
+    }
+  }, 1000);
+}
+
 function $(id) {
   return document.getElementById(id);
 }
 
-function saveProfile() {
-  const profile = {
-    driverName: $("driverName").value.trim(),
-    phone: $("driverPhone").value.trim(),
-    company: $("taxiCompany").value.trim(),
-    plate: $("plateNumber").value.trim(),
-  };
-  localStorage.setItem("driver_profile", JSON.stringify(profile));
+function getToken() {
+  return localStorage.getItem("driverSessionToken");
 }
 
-function loadProfile() {
-  try {
-    const raw = localStorage.getItem("driver_profile");
-    if (!raw) return;
-    const p = JSON.parse(raw);
-    $("driverName").value = p.driverName || "";
-    $("driverPhone").value = p.phone || "";
-    $("taxiCompany").value = p.company || "";
-    $("plateNumber").value = p.plate || "";
-  } catch (err) {
-    console.error("profile load error", err);
+function setSession(data) {
+  localStorage.setItem("driverSessionToken", data.session_token);
+  localStorage.setItem("driverProfile", JSON.stringify(data.driver));
+}
+
+function clearSession() {
+  localStorage.removeItem("driverSessionToken");
+  localStorage.removeItem("driverProfile");
+  localStorage.removeItem("current_trip_id");
+}
+
+async function apiFetch(path, options = {}) {
+  const { skipUnauthorizedRedirect = false, ...fetchOptions } = options;
+  const headers = { "Content-Type": "application/json", ...(fetchOptions.headers || {}) };
+  const token = getToken();
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  const resp = await fetch(`${API_BASE}${path}`, { ...fetchOptions, headers });
+  if (resp.status === 401 && !skipUnauthorizedRedirect) {
+    clearSession();
+    renderAuthState();
+    throw new Error("Unauthorized");
+  }
+  return resp;
+}
+
+function renderAuthState() {
+  const hasToken = !!getToken();
+  $("loginScreen").style.display = hasToken ? "none" : "block";
+  $("dashboardScreen").style.display = hasToken ? "block" : "none";
+  $("profileScreen").style.display = "none";
+
+  if (hasToken) {
+    updateHeaderProfile();
   }
 }
 
-async function ensureDriver() {
-  const name = $("driverName").value.trim();
-  if (!name) {
-    alert("Βάλε όνομα οδηγού (όπως θα εμφανίζεται στο dashboard)");
-    return null;
-  }
+function updateHeaderProfile() {
+  const driver = JSON.parse(localStorage.getItem("driverProfile") || "{}");
+  $("loggedInAs").textContent = `Συνδεδεμένος ως: ${driver.name || driver.phone} (${driver.role || "taxi"})`;
+}
 
+async function requestCode() {
   const payload = {
-    name,
-    phone: $("driverPhone").value.trim() || null,
-    taxi_company: $("taxiCompany").value.trim() || null,
-    plate_number: $("plateNumber").value.trim() || null,
-    notes: null,
+    phone: $("loginPhone").value.trim(),
+    email: $("loginEmail").value.trim() || null,
+    name: $("loginName").value.trim() || null,
+    role: "taxi",
   };
 
-  try {
-    const resp = await fetch(`${API_BASE}/api/v1/drivers`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!resp.ok) {
-      const txt = await resp.text();
-      console.error("driver create error", txt);
-      alert("Σφάλμα δημιουργίας οδηγού. Δες τα logs.");
-      return null;
+  const resp = await apiFetch("/api/auth/request-code", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    skipUnauthorizedRedirect: true,
+  });
+
+  if (resp.status === 429) {
+    let retryAfter = 120;
+    try {
+      const data = await resp.json();
+      retryAfter = Number(data.retry_after || data?.detail?.retry_after || 120);
+    } catch (err) {
+      console.warn("cooldown parse error", err);
     }
-    const data = await resp.json();
-    localStorage.setItem("driver_id", String(data.id));
-    return data.id;
-  } catch (err) {
-    console.error("driver create fetch error", err);
-    alert("Δε μπόρεσα να μιλήσω με τον server (driver).");
-    return null;
+    startRequestCodeCooldown(retryAfter);
+    $("authMessage").textContent = `Περίμενε ${retryAfter}s πριν ζητήσεις νέο κωδικό.`;
+    return;
   }
+
+  if (!resp.ok) {
+    $("authMessage").textContent = "Αποτυχία αποστολής κωδικού.";
+    return;
+  }
+
+  const data = await resp.json();
+  $("codeWrap").style.display = "block";
+  $("authMessage").textContent = `Στάλθηκε 6-ψήφιος κωδικός (${data.delivery}) στο ${data.masked}.`;
+  startRequestCodeCooldown(120);
+}
+
+async function verifyCode() {
+  const payload = {
+    phone: $("loginPhone").value.trim(),
+    code: $("loginCode").value.trim(),
+  };
+
+  const resp = await apiFetch("/api/auth/verify-code", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    skipUnauthorizedRedirect: true,
+  });
+  if (!resp.ok) {
+    $("authMessage").textContent = "Λάθος ή ληγμένος κωδικός.";
+    return;
+  }
+
+  const data = await resp.json();
+  setSession(data);
+  renderAuthState();
 }
 
 async function startTrip() {
-  let driverId = localStorage.getItem("driver_id");
-  if (!driverId) {
-    driverId = await ensureDriver();
-    if (!driverId) return;
-  }
-
-  const origin = $("tripOrigin").value.trim() || null;
-  const dest = $("tripDestination").value.trim() || null;
-
   const payload = {
-    driver_id: Number(driverId),
-    origin,
-    destination: dest,
+    origin: $("tripOrigin").value.trim() || null,
+    destination: $("tripDestination").value.trim() || null,
     notes: null,
   };
-
-  try {
-    const resp = await fetch(`${API_BASE}/api/v1/trips/start`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!resp.ok) {
-      const txt = await resp.text();
-      console.error("trip start error", txt);
-      alert("Σφάλμα εκκίνησης δρομολογίου.");
-      return;
-    }
-    const data = await resp.json();
-    localStorage.setItem("current_trip_id", String(data.id));
-    $("tripStatus").textContent = `Trip #${data.id} ενεργό`;
-  } catch (err) {
-    console.error("trip start fetch error", err);
-    alert("Δε μπόρεσα να μιλήσω με τον server (trip start).");
+  const resp = await apiFetch("/api/v1/trips/start", { method: "POST", body: JSON.stringify(payload) });
+  if (!resp.ok) {
+    alert("Σφάλμα εκκίνησης δρομολογίου.");
+    return;
   }
+  const data = await resp.json();
+  localStorage.setItem("current_trip_id", String(data.id));
+  $("tripStatus").textContent = `Trip #${data.id} ενεργό`;
 }
 
 async function finishTrip() {
@@ -111,43 +174,25 @@ async function finishTrip() {
   }
 
   const payload = {
+    notes: $("tripNotes").value.trim() || null,
     distance_km: null,
     avg_speed_kmh: null,
     safety_score: null,
-    notes: $("tripNotes").value.trim() || null,
   };
-
-  try {
-    const resp = await fetch(`${API_BASE}/api/v1/trips/${tripId}/finish`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!resp.ok) {
-      const txt = await resp.text();
-      console.error("trip finish error", txt);
-      alert("Σφάλμα ολοκλήρωσης δρομολόγίου.");
-      return;
-    }
-    const data = await resp.json();
-    $("tripStatus").textContent = `Trip #${data.id} ολοκληρώθηκε`;
-    localStorage.removeItem("current_trip_id");
-  } catch (err) {
-    console.error("trip finish fetch error", err);
-    alert("Δε μπόρεσα να μιλήσω με τον server (trip finish).");
+  const resp = await apiFetch(`/api/v1/trips/${tripId}/finish`, { method: "POST", body: JSON.stringify(payload) });
+  if (!resp.ok) {
+    alert("Σφάλμα ολοκλήρωσης δρομολογίου.");
+    return;
   }
+
+  const data = await resp.json();
+  $("tripStatus").textContent = `Trip #${data.id} ολοκληρώθηκε`;
+  localStorage.removeItem("current_trip_id");
 }
 
 async function sendTelemetry() {
-  let driverId = localStorage.getItem("driver_id");
-  if (!driverId) {
-    driverId = await ensureDriver();
-    if (!driverId) return;
-  }
   const tripId = localStorage.getItem("current_trip_id");
-
   const payload = {
-    driver_id: Number(driverId),
     trip_id: tripId ? Number(tripId) : null,
     latitude: $("gpsLat").value ? Number($("gpsLat").value) : null,
     longitude: $("gpsLng").value ? Number($("gpsLng").value) : null,
@@ -156,128 +201,74 @@ async function sendTelemetry() {
     brake_hard: $("brakeHard").checked,
     accel_hard: $("accelHard").checked,
     cornering_hard: $("cornerHard").checked,
-    road_type: $("roadType").value || null,
+    road_type: null,
     weather: $("weather").value || null,
     raw_notes: $("telemetryNotes").value.trim() || null,
   };
 
-  try {
-    const resp = await fetch(`${API_BASE}/api/v1/telemetry`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!resp.ok) {
-      const txt = await resp.text();
-      console.error("telemetry error", txt);
-      alert("Σφάλμα αποστολής telemetry.");
-      return;
-    }
-    $("telemetryNotes").value = "";
-    $("brakeHard").checked = false;
-    $("accelHard").checked = false;
-    $("cornerHard").checked = false;
-  } catch (err) {
-    console.error("telemetry fetch error", err);
-    alert("Δε μπόρεσα να μιλήσω με τον server (telemetry).");
+  const resp = await apiFetch("/api/v1/telemetry", { method: "POST", body: JSON.stringify(payload) });
+  if (!resp.ok) {
+    alert("Σφάλμα αποστολής telemetry.");
+    return;
+  }
+  $("telemetryNotes").value = "";
+}
+
+async function openProfile() {
+  $("dashboardScreen").style.display = "none";
+  $("profileScreen").style.display = "block";
+
+  const driver = JSON.parse(localStorage.getItem("driverProfile") || "{}");
+  $("profilePhone").value = driver.phone || "";
+  $("profileName").value = driver.name || "";
+  $("profileRole").value = driver.role || "taxi";
+
+  const walletResp = await apiFetch("/api/wallet");
+  if (walletResp.ok) {
+    const wallet = await walletResp.json();
+    $("walletAddress").value = wallet.wallet_address || "";
+    $("tokenSymbol").value = wallet.company_token_symbol || "";
   }
 }
 
-// Voice capture (Web Speech API, where available)
-let recognition = null;
-let isRecording = false;
-
-function initSpeech() {
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) {
-    console.warn("No SpeechRecognition API");
-    $("voiceStatus").textContent = "Η συσκευή δεν υποστηρίζει φωνητική αναγνώριση.";
+async function saveWallet() {
+  const payload = {
+    wallet_address: $("walletAddress").value.trim(),
+    company_token_symbol: $("tokenSymbol").value.trim() || null,
+  };
+  const resp = await apiFetch("/api/wallet/link", { method: "POST", body: JSON.stringify(payload) });
+  if (!resp.ok) {
+    $("walletMessage").textContent = "Αποτυχία αποθήκευσης wallet.";
     return;
   }
-  recognition = new SpeechRecognition();
-  recognition.lang = "el-GR";
-  recognition.continuous = false;
-  recognition.interimResults = false;
 
-  recognition.onstart = () => {
-    isRecording = true;
-    $("voiceDot").classList.add("recording");
-    $("voiceStatus").textContent = "Μίλα τώρα…";
-  };
+  const profile = JSON.parse(localStorage.getItem("driverProfile") || "{}");
+  profile.name = $("profileName").value.trim() || null;
+  localStorage.setItem("driverProfile", JSON.stringify(profile));
 
-  recognition.onerror = (e) => {
-    console.error("speech error", e);
-    isRecording = false;
-    $("voiceDot").classList.remove("recording");
-    $("voiceStatus").textContent = "Σφάλμα φωνής.";
-  };
+  await apiFetch("/api/me", {
+    method: "POST",
+    body: JSON.stringify({ name: profile.name }),
+  });
 
-  recognition.onend = () => {
-    isRecording = false;
-    $("voiceDot").classList.remove("recording");
-    if ($("voiceStatus").textContent === "Μίλα τώρα…") {
-      $("voiceStatus").textContent = "Πάτα •VOICE για νέο μήνυμα.";
-    }
-  };
-
-  recognition.onresult = async (event) => {
-    const transcript = event.results[0][0].transcript;
-    $("voiceStatus").textContent = `«${transcript}»`;
-
-    let driverId = localStorage.getItem("driver_id");
-    if (!driverId) {
-      driverId = await ensureDriver();
-      if (!driverId) return;
-    }
-    const tripId = localStorage.getItem("current_trip_id");
-
-    const payload = {
-      driver_id: Number(driverId),
-      trip_id: tripId ? Number(tripId) : null,
-      transcript,
-      intent_hint: null,
-    };
-
-    try {
-      const resp = await fetch(`${API_BASE}/api/v1/voice-events`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (!resp.ok) {
-        const txt = await resp.text();
-        console.error("voice event error", txt);
-        return;
-      }
-    } catch (err) {
-      console.error("voice fetch error", err);
-    }
-  };
-}
-
-function toggleVoice() {
-  if (!recognition) {
-    alert("Η συσκευή/Browser δεν υποστηρίζει ακόμη φωνητικές εντολές.");
-    return;
-  }
-  if (isRecording) {
-    recognition.stop();
-  } else {
-    recognition.start();
-  }
+  $("walletMessage").textContent = "Το wallet αποθηκεύτηκε.";
+  updateHeaderProfile();
 }
 
 window.addEventListener("DOMContentLoaded", () => {
-  loadProfile();
-  initSpeech();
-
-  $("driverName").addEventListener("change", saveProfile);
-  $("driverPhone").addEventListener("change", saveProfile);
-  $("taxiCompany").addEventListener("change", saveProfile);
-  $("plateNumber").addEventListener("change", saveProfile);
+  renderAuthState();
+  updateRequestCodeButton();
+  $("btnSendCode").addEventListener("click", requestCode);
+  $("btnVerifyCode").addEventListener("click", verifyCode);
 
   $("btnStartTrip").addEventListener("click", startTrip);
   $("btnFinishTrip").addEventListener("click", finishTrip);
   $("btnSendTelemetry").addEventListener("click", sendTelemetry);
-  $("voiceButton").addEventListener("click", toggleVoice);
+
+  $("btnOpenProfile").addEventListener("click", openProfile);
+  $("btnCloseProfile").addEventListener("click", () => {
+    $("profileScreen").style.display = "none";
+    $("dashboardScreen").style.display = "block";
+  });
+  $("btnSaveWallet").addEventListener("click", saveWallet);
 });
