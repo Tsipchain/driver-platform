@@ -1,5 +1,44 @@
 const API_BASE = window.location.origin;
 
+
+let requestCodeCooldownTimer = null;
+let requestCodeCooldownLeft = 0;
+
+function updateRequestCodeButton() {
+  const btn = $("btnSendCode");
+  if (!btn) return;
+  if (requestCodeCooldownLeft > 0) {
+    btn.disabled = true;
+    btn.textContent = `Αποστολή ξανά σε ${requestCodeCooldownLeft}s`;
+  } else {
+    btn.disabled = false;
+    btn.textContent = "Αποστολή κωδικού";
+  }
+}
+
+function startRequestCodeCooldown(seconds) {
+  if (requestCodeCooldownTimer) {
+    clearInterval(requestCodeCooldownTimer);
+    requestCodeCooldownTimer = null;
+  }
+
+  requestCodeCooldownLeft = Math.max(0, Number(seconds) || 0);
+  updateRequestCodeButton();
+
+  if (requestCodeCooldownLeft <= 0) {
+    return;
+  }
+
+  requestCodeCooldownTimer = setInterval(() => {
+    requestCodeCooldownLeft = Math.max(0, requestCodeCooldownLeft - 1);
+    updateRequestCodeButton();
+    if (requestCodeCooldownLeft === 0 && requestCodeCooldownTimer) {
+      clearInterval(requestCodeCooldownTimer);
+      requestCodeCooldownTimer = null;
+    }
+  }, 1000);
+}
+
 function $(id) {
   return document.getElementById(id);
 }
@@ -65,6 +104,20 @@ async function requestCode() {
     body: JSON.stringify(payload),
     skipUnauthorizedRedirect: true,
   });
+
+  if (resp.status === 429) {
+    let retryAfter = 120;
+    try {
+      const data = await resp.json();
+      retryAfter = Number(data.retry_after || data?.detail?.retry_after || 120);
+    } catch (err) {
+      console.warn("cooldown parse error", err);
+    }
+    startRequestCodeCooldown(retryAfter);
+    $("authMessage").textContent = `Περίμενε ${retryAfter}s πριν ζητήσεις νέο κωδικό.`;
+    return;
+  }
+
   if (!resp.ok) {
     $("authMessage").textContent = "Αποτυχία αποστολής κωδικού.";
     return;
@@ -73,6 +126,7 @@ async function requestCode() {
   const data = await resp.json();
   $("codeWrap").style.display = "block";
   $("authMessage").textContent = `Στάλθηκε 6-ψήφιος κωδικός (${data.delivery}) στο ${data.masked}.`;
+  startRequestCodeCooldown(120);
 }
 
 async function verifyCode() {
@@ -203,6 +257,7 @@ async function saveWallet() {
 
 window.addEventListener("DOMContentLoaded", () => {
   renderAuthState();
+  updateRequestCodeButton();
   $("btnSendCode").addEventListener("click", requestCode);
   $("btnVerifyCode").addEventListener("click", verifyCode);
 

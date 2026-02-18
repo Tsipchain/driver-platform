@@ -10,6 +10,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from . import crud, models, schemas
@@ -65,26 +66,31 @@ def generate_otp_code() -> str:
     return str(secrets.randbelow(900000) + 100000)
 
 
-def _smtp_from() -> Optional[str]:
-    return os.getenv("DRIVER_SMTP_FROM") or os.getenv("DRIVER_EMAIL_FROM")
+def _smtp_enabled() -> bool:
+    return (os.getenv("DRIVER_SMTP_ENABLED") or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _smtp_configured() -> bool:
-    required = ["DRIVER_SMTP_HOST", "DRIVER_SMTP_PORT", "DRIVER_SMTP_USER", "DRIVER_SMTP_PASSWORD"]
-    return all(os.getenv(key) for key in required) and bool(_smtp_from())
+    required = [
+        "DRIVER_SMTP_HOST",
+        "DRIVER_SMTP_PORT",
+        "DRIVER_SMTP_USER",
+        "DRIVER_SMTP_PASSWORD",
+        "DRIVER_SMTP_FROM",
+    ]
+    return all((os.getenv(key) or "").strip() for key in required)
 
 
 def send_code_via_email(email: str, code: str, name_or_phone: str) -> bool:
-    if not _smtp_configured() or not email:
+    if not email or not _smtp_enabled() or not _smtp_configured():
         return False
 
-    smtp_host = os.getenv("DRIVER_SMTP_HOST")
-    smtp_port = int(os.getenv("DRIVER_SMTP_PORT", "465"))
-    smtp_user = os.getenv("DRIVER_SMTP_USER")
-    smtp_password = os.getenv("DRIVER_SMTP_PASSWORD")
-    smtp_from = _smtp_from()
-    smtp_timeout = int(os.getenv("DRIVER_SMTP_TIMEOUT", "10"))
-    smtp_use_ssl = (os.getenv("DRIVER_SMTP_USE_SSL") or "").strip().lower() in {"1", "true", "yes"}
+    smtp_host = (os.getenv("DRIVER_SMTP_HOST") or "").strip()
+    smtp_port = int((os.getenv("DRIVER_SMTP_PORT") or "465").strip())
+    smtp_user = (os.getenv("DRIVER_SMTP_USER") or "").strip()
+    smtp_password = os.getenv("DRIVER_SMTP_PASSWORD") or ""
+    smtp_from = (os.getenv("DRIVER_SMTP_FROM") or "").strip()
+    smtp_timeout = int((os.getenv("DRIVER_SMTP_TIMEOUT") or "10").strip())
 
     msg = EmailMessage()
     msg["Subject"] = "[Thronos Driver] Κωδικός σύνδεσης / Login code"
@@ -119,16 +125,9 @@ If you did not request this code, you can safely ignore this email.
     )
 
     try:
-        if smtp_use_ssl:
-            with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=smtp_timeout) as server:
-                server.login(smtp_user, smtp_password)
-                server.send_message(msg)
-        else:
-            with smtplib.SMTP(smtp_host, smtp_port, timeout=smtp_timeout) as server:
-                server.starttls()
-                server.login(smtp_user, smtp_password)
-                server.send_message(msg)
-
+        with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=smtp_timeout) as server:
+            server.login(smtp_user, smtp_password)
+            server.send_message(msg)
         logger.info("OTP email sent to %s", email)
         return True
     except Exception:
@@ -205,23 +204,33 @@ def request_code(req: schemas.AuthRequestCode, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Invalid phone")
 
     driver = crud.get_or_create_driver_by_phone(db, phone=phone, email=req.email, name=req.name, role=req.role)
+    now = datetime.utcnow()
+    cooldown_seconds = 120
+
+    if driver.last_code_sent_at:
+        elapsed = (now - driver.last_code_sent_at).total_seconds()
+        if elapsed < cooldown_seconds:
+            retry_after = max(1, int(cooldown_seconds - elapsed))
+            return JSONResponse(status_code=429, content={"error": "cooldown", "retry_after": retry_after})
+
     code = generate_otp_code()
     driver.verification_code = code
-    driver.verification_expires_at = datetime.utcnow() + timedelta(minutes=10)
+    driver.verification_expires_at = now + timedelta(minutes=10)
+    driver.last_code_sent_at = now
     driver.failed_attempts = 0
 
     delivery = "log"
     channel = "sms"
     recipient_name = (req.name or driver.name or phone).strip()
 
-    if req.email and _smtp_configured():
+    if req.email and _smtp_enabled() and _smtp_configured():
         if send_code_via_email(req.email, code, recipient_name):
             delivery = "email"
             channel = "email"
         else:
             logger.warning("OTP delivery fell back to log-only mode for %s", req.email)
-    elif req.email and not _smtp_configured():
-        logger.warning("SMTP not configured; falling back to log-only OTP mode for %s", req.email)
+    elif req.email and (not _smtp_enabled() or not _smtp_configured()):
+        logger.warning("SMTP disabled or incomplete; falling back to log-only OTP mode for %s", req.email)
 
     if delivery == "log":
         if is_production_env():

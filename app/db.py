@@ -61,6 +61,7 @@ def _run_sqlite_migrations() -> None:
             "failed_attempts": "ALTER TABLE drivers ADD COLUMN failed_attempts INTEGER NOT NULL DEFAULT 0",
             "created_at": "ALTER TABLE drivers ADD COLUMN created_at DATETIME",
             "last_login_at": "ALTER TABLE drivers ADD COLUMN last_login_at DATETIME",
+            "last_code_sent_at": "ALTER TABLE drivers ADD COLUMN last_code_sent_at DATETIME",
             "taxi_company": "ALTER TABLE drivers ADD COLUMN taxi_company TEXT",
             "plate_number": "ALTER TABLE drivers ADD COLUMN plate_number TEXT",
             "notes": "ALTER TABLE drivers ADD COLUMN notes TEXT",

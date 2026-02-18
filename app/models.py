@@ -23,6 +23,7 @@ class Driver(Base):
     failed_attempts = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     last_login_at = Column(DateTime, nullable=True)
+    last_code_sent_at = Column(DateTime, nullable=True)
 
     taxi_company = Column(String(128), nullable=True)
     plate_number = Column(String(32), nullable=True)
