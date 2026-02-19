@@ -267,6 +267,7 @@ async function startVoiceRecording() {
     console.error(err);
     toast("Αδυναμία πρόσβασης στο μικρόφωνο.");
   }
+  $("telemetryNotes").value = "";
 }
 
 async function stopVoiceRecording() {
