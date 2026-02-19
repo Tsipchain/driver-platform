@@ -118,6 +118,10 @@ class VoiceMessage(Base):
     target = Column(String(64), nullable=True)
     note = Column(Text, nullable=True)
     status = Column(String(32), nullable=False, default="received")
+    direction = Column(String(16), nullable=False, default="up")
+    in_reply_to = Column(Integer, nullable=True)
+    read_at = Column(DateTime, nullable=True)
+    group_tag = Column(String(64), nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     driver = relationship("Driver")
@@ -142,3 +146,27 @@ class Certification(Base):
     issued_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     driver = relationship("Driver")
+
+
+class TenantBranding(Base):
+    __tablename__ = "tenant_branding"
+
+    id = Column(Integer, primary_key=True, index=True)
+    group_tag = Column(String(64), nullable=False, unique=True, index=True)
+    app_name = Column(String(128), nullable=True)
+    logo_url = Column(String(512), nullable=True)
+    favicon_url = Column(String(512), nullable=True)
+    primary_color = Column(String(32), nullable=True)
+    plan = Column(String(32), nullable=False, default="basic")
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class OperatorToken(Base):
+    __tablename__ = "operator_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    group_tag = Column(String(64), nullable=False, index=True)
+    token_hash = Column(String(128), nullable=False, unique=True, index=True)
+    role = Column(String(32), nullable=False, default="operator")
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_used_at = Column(DateTime, nullable=True)

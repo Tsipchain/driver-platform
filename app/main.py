@@ -1,4 +1,5 @@
 import logging
+import hashlib
 import os
 import re
 import secrets
@@ -223,6 +224,41 @@ def _voice_storage_base() -> Path:
     return Path("/app/data/voice")
 
 
+
+
+def _hash_token(raw: str) -> str:
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _resolve_operator_scope(db: Session, x_admin_token: Optional[str]) -> Optional[str]:
+    token = (x_admin_token or "").strip()
+    if not token:
+        return None
+
+    global_token = _get_admin_token()
+    if global_token and token == global_token:
+        return None  # full access
+
+    hashed = _hash_token(token)
+    row = db.query(models.OperatorToken).filter(models.OperatorToken.token_hash == hashed).first()
+    if not row:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    row.last_used_at = datetime.utcnow()
+    db.commit()
+    return row.group_tag
+
+
+def _branding_defaults(group_tag: Optional[str]) -> dict:
+    return {
+        "group_tag": group_tag,
+        "plan": "basic",
+        "app_name": "Thronos Driver",
+        "logo_url": "https://thronoschain.org/thronos-decentralize.png",
+        "favicon_url": "https://thronoschain.org/thronos-coin.png",
+        "primary_color": "#00ff88",
+    }
+
+
 def _parse_multipart_voice_payload(raw_body: bytes, content_type: str) -> tuple[bytes, str, Optional[int], Optional[str], Optional[str]]:
     boundary_marker = "boundary="
     if boundary_marker not in content_type:
@@ -394,6 +430,8 @@ def me(current_driver: Driver = Depends(get_current_driver), db: Session = Depen
         "email": current_driver.email,
         "wallet_address": current_driver.wallet_address,
         "company_token_symbol": current_driver.company_token_symbol,
+        "group_tag": current_driver.group_tag,
+        "company_name": current_driver.company_name,
         "stats": {
             "trips": crud.count_driver_trips(db, current_driver.id),
             "telemetry": crud.count_driver_telemetry(db, current_driver.id),
@@ -482,6 +520,10 @@ async def api_create_voice_message(
         note=note,
         status="received",
     )
+    msg.direction = "up"
+    msg.group_tag = current_driver.group_tag
+    db.commit()
+    db.refresh(msg)
     return msg
 
 
@@ -518,21 +560,205 @@ def api_recent_voice_messages(
 @app.get("/api/operator/dashboard")
 def api_operator_dashboard(
     group_tag: Optional[str] = None,
-    _: None = Depends(require_admin_token),
+    x_admin_token: Optional[str] = Header(default=None),
     db: Session = Depends(get_db),
 ):
-    return crud.get_operator_dashboard(db, group_tag=group_tag)
+    forced_group = _resolve_operator_scope(db, x_admin_token)
+    effective_group = forced_group or group_tag
+    return crud.get_operator_dashboard(db, group_tag=effective_group)
 
 
 @app.get("/api/operator/events/recent")
 def api_operator_recent_events(
     group_tag: Optional[str] = None,
     limit: int = Query(default=50, ge=1, le=500),
-    _: None = Depends(require_admin_token),
+    x_admin_token: Optional[str] = Header(default=None),
     db: Session = Depends(get_db),
 ):
-    return {"events": crud.get_recent_operator_events(db, group_tag=group_tag, limit=limit)}
+    forced_group = _resolve_operator_scope(db, x_admin_token)
+    effective_group = forced_group or group_tag
+    return {"events": crud.get_recent_operator_events(db, group_tag=effective_group, limit=limit)}
 
+
+
+
+@app.get("/api/branding")
+def api_branding(group_tag: Optional[str] = None, db: Session = Depends(get_db)):
+    defaults = _branding_defaults(group_tag)
+    if not group_tag:
+        return defaults
+    row = db.query(models.TenantBranding).filter(models.TenantBranding.group_tag == group_tag).first()
+    if not row:
+        return defaults
+    defaults.update({
+        "plan": row.plan or defaults["plan"],
+        "app_name": row.app_name or defaults["app_name"],
+        "logo_url": row.logo_url or defaults["logo_url"],
+        "favicon_url": row.favicon_url or defaults["favicon_url"],
+        "primary_color": row.primary_color or defaults["primary_color"],
+    })
+    return defaults
+
+
+@app.post("/api/admin/branding")
+async def api_admin_branding(request: Request, x_admin_token: Optional[str] = Header(default=None), db: Session = Depends(get_db)):
+    if not _get_admin_token() or x_admin_token != _get_admin_token():
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    if "multipart/form-data" not in (request.headers.get("content-type") or ""):
+        raise HTTPException(status_code=400, detail="Expected multipart/form-data")
+
+    form = await request.form()
+    group_tag = (form.get("group_tag") or "").strip()
+    if not group_tag:
+        raise HTTPException(status_code=400, detail="group_tag required")
+
+    row = db.query(models.TenantBranding).filter(models.TenantBranding.group_tag == group_tag).first()
+    if not row:
+        row = models.TenantBranding(group_tag=group_tag, updated_at=datetime.utcnow())
+        db.add(row)
+
+    row.plan = (form.get("plan") or row.plan or "basic")
+    row.app_name = form.get("app_name") or row.app_name
+    row.primary_color = form.get("primary_color") or row.primary_color
+    row.logo_url = form.get("logo_url") or row.logo_url
+    row.favicon_url = form.get("favicon_url") or row.favicon_url
+
+    brand_dir = Path("/app/data/branding") / group_tag
+    brand_dir.mkdir(parents=True, exist_ok=True)
+
+    logo_file = form.get("logo_file")
+    if logo_file is not None and hasattr(logo_file, "read"):
+        content = await logo_file.read()
+        (brand_dir / "logo.png").write_bytes(content)
+        row.logo_url = f"/branding/{group_tag}/logo.png"
+
+    favicon_file = form.get("favicon_file")
+    if favicon_file is not None and hasattr(favicon_file, "read"):
+        content = await favicon_file.read()
+        (brand_dir / "favicon.png").write_bytes(content)
+        row.favicon_url = f"/branding/{group_tag}/favicon.png"
+
+    row.updated_at = datetime.utcnow()
+    db.commit()
+    return {"ok": True}
+
+
+@app.get("/branding/{group_tag}/{filename}")
+def branding_file(group_tag: str, filename: str):
+    if filename not in {"logo.png", "favicon.png", "favicon.ico"}:
+        raise HTTPException(status_code=404, detail="Not found")
+    file_path = Path("/app/data/branding") / group_tag / filename
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(file_path)
+
+
+@app.get("/api/operator/voice/recent")
+def api_operator_voice_recent(
+    group_tag: Optional[str] = None,
+    limit: int = Query(default=50, ge=1, le=500),
+    x_admin_token: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    forced_group = _resolve_operator_scope(db, x_admin_token)
+    effective_group = forced_group or group_tag
+    q = db.query(models.VoiceMessage).filter(models.VoiceMessage.direction == "up")
+    if effective_group:
+        q = q.filter(models.VoiceMessage.group_tag == effective_group)
+    rows = q.order_by(models.VoiceMessage.created_at.desc()).limit(limit).all()
+    return {"items": [
+        {"id":r.id,"driver_id":r.driver_id,"trip_id":r.trip_id,"group_tag":r.group_tag,"note":r.note,"created_at":r.created_at}
+        for r in rows
+    ]}
+
+
+@app.post("/api/operator/voice/{msg_id}/reply")
+async def api_operator_voice_reply(
+    msg_id: int,
+    request: Request,
+    x_admin_token: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    forced_group = _resolve_operator_scope(db, x_admin_token)
+    parent = db.query(models.VoiceMessage).filter(models.VoiceMessage.id == msg_id).first()
+    if not parent:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if forced_group and parent.group_tag != forced_group:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    if "multipart/form-data" not in (request.headers.get("content-type") or ""):
+        raise HTTPException(status_code=400, detail="Expected multipart/form-data")
+    raw = await request.body()
+    file_bytes, incoming_filename, _trip_id, note, _target = _parse_multipart_voice_payload(raw, request.headers.get("content-type",""))
+
+    ts = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+    suffix = Path(incoming_filename).suffix or ".webm"
+    ddir = _voice_storage_base() / str(parent.driver_id) / "down"
+    ddir.mkdir(parents=True, exist_ok=True)
+    path = ddir / f"{ts}{suffix}"
+    path.write_bytes(file_bytes)
+
+    row = crud.create_voice_message(db, driver_id=parent.driver_id, trip_id=parent.trip_id, file_path=str(path), note=note, target="cb", status="received")
+    row.direction = "down"
+    row.in_reply_to = parent.id
+    row.group_tag = parent.group_tag
+    db.commit(); db.refresh(row)
+    return {"ok": True, "id": row.id}
+
+
+@app.get("/api/v1/voice-messages/inbox")
+def api_driver_voice_inbox(
+    since: Optional[str] = None,
+    current_driver: Driver = Depends(get_current_driver),
+    db: Session = Depends(get_db),
+):
+    q = db.query(models.VoiceMessage).filter(models.VoiceMessage.driver_id == current_driver.id, models.VoiceMessage.direction == "down")
+    if since:
+        try:
+            dt = datetime.fromisoformat(since)
+            q = q.filter(models.VoiceMessage.created_at >= dt)
+        except Exception:
+            pass
+    rows = q.order_by(models.VoiceMessage.created_at.desc()).limit(100).all()
+    return {"items": [{"id":r.id,"note":r.note,"created_at":r.created_at,"read_at":r.read_at} for r in rows]}
+
+
+@app.post("/api/v1/voice-messages/{msg_id}/ack")
+def api_driver_voice_ack(msg_id: int, current_driver: Driver = Depends(get_current_driver), db: Session = Depends(get_db)):
+    row = db.query(models.VoiceMessage).filter(models.VoiceMessage.id == msg_id, models.VoiceMessage.driver_id == current_driver.id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Message not found")
+    row.read_at = datetime.utcnow()
+    db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/v1/voice-messages/{msg_id}/download")
+def api_voice_download(
+    msg_id: int,
+    authorization: Optional[str] = Header(default=None),
+    x_admin_token: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    row = db.query(models.VoiceMessage).filter(models.VoiceMessage.id == msg_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    # driver auth path
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.split(" ",1)[1].strip()
+        if not crud.is_token_revoked(db, token):
+            sess = crud.get_session_by_token(db, token)
+            if sess and sess.driver_id == row.driver_id:
+                return FileResponse(row.file_path)
+
+    forced_group = _resolve_operator_scope(db, x_admin_token)
+    if forced_group is not None and row.group_tag != forced_group:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if x_admin_token:
+        return FileResponse(row.file_path)
+
+    raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 

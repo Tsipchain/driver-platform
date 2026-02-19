@@ -8,12 +8,39 @@ let mediaStopTimeout = null;
 let operatorMap = null;
 let operatorMarkers = [];
 let tripActive = false;
+let cbInboxTimer = null;
 
 function $(id) { return document.getElementById(id); }
 function isOperatorMode() { return window.location.pathname.startsWith('/operator') || window.location.pathname.startsWith('/school'); }
 function isSchoolMode() { return window.location.pathname.startsWith('/school'); }
 
 function toast(msg) { alert(msg); }
+
+async function applyBranding() {
+  const qpGroup = new URLSearchParams(window.location.search).get("group_tag");
+  let groupTag = qpGroup || null;
+  if (!groupTag && getToken()) {
+    try {
+      const meResp = await apiFetch('/api/me', { skipUnauthorizedRedirect: true });
+      if (meResp.ok) {
+        const me = await meResp.json();
+        groupTag = me.group_tag || null;
+      }
+    } catch (_) {}
+  }
+
+  const qs = groupTag ? `?group_tag=${encodeURIComponent(groupTag)}` : '';
+  try {
+    const resp = await fetch(`${API_BASE}/api/branding${qs}`);
+    if (!resp.ok) return;
+    const b = await resp.json();
+    document.title = b.app_name || 'Thronos Driver';
+    const favicon = document.getElementById('faviconLink');
+    if (favicon && b.favicon_url) favicon.href = b.favicon_url;
+    if (b.primary_color) document.documentElement.style.setProperty('--accent', b.primary_color);
+  } catch (_) {}
+}
+
 
 function updateRequestCodeButton() {
   const btn = $("btnSendCode");
@@ -84,10 +111,42 @@ function renderAuthState() {
 
   const hasToken = !!getToken();
   $("loginScreen").style.display = hasToken ? "none" : "block";
+  const sendBtn = $("btnSendCode"); if (sendBtn) sendBtn.style.display = hasToken ? "none" : "inline-flex";
   $("dashboardScreen").style.display = hasToken ? "block" : "none";
   $("profileScreen").style.display = "none";
   $("operatorScreen").style.display = "none";
   if (hasToken) updateHeaderProfile();
+}
+
+
+function renderCbInbox(items) {
+  let box = document.getElementById('cbInbox');
+  if (!box) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = '<div class="card-header"><div class="card-title">Inbox από Κέντρο</div></div><div id="cbInbox" class="small-text">-</div>';
+    document.getElementById('dashboardScreen')?.appendChild(card);
+    box = document.getElementById('cbInbox');
+  }
+  box.innerHTML = (items || []).map(i => `<div style="margin-bottom:8px;"><div>${i.note || 'Voice message'} · ${i.created_at || ''}</div><button data-ack="${i.id}" class="outline">Ack</button></div>`).join('') || 'No messages';
+  box.querySelectorAll('button[data-ack]').forEach(b => b.onclick = async () => {
+    await apiFetch(`/api/v1/voice-messages/${b.getAttribute('data-ack')}/ack`, { method: 'POST' });
+    b.disabled = true;
+  });
+}
+
+async function pollCbInbox() {
+  if (!getToken()) return;
+  const resp = await apiFetch('/api/v1/voice-messages/inbox', { skipUnauthorizedRedirect: true });
+  if (!resp.ok) return;
+  const data = await resp.json();
+  renderCbInbox(data.items || []);
+}
+
+function startCbInboxPolling() {
+  if (cbInboxTimer) clearInterval(cbInboxTimer);
+  pollCbInbox();
+  cbInboxTimer = setInterval(pollCbInbox, 12000);
 }
 
 function updateHeaderProfile() {
@@ -132,6 +191,7 @@ async function verifyCode() {
   const data = await resp.json();
   setSession(data);
   renderAuthState();
+  startCbInboxPolling();
 }
 
 async function startTrip() {
@@ -298,20 +358,60 @@ function logout() {
   if (tripActive) {
     if (!confirm("Έχεις ενεργή διαδρομή. Θέλεις σίγουρα να αποσυνδεθείς; Αυτό θα ακυρώσει τη διαδρομή.")) return;
   }
+  const token = getToken();
   try { localStorage.removeItem("driverSessionToken"); } catch (e) {}
   try { localStorage.removeItem("driverProfile"); } catch (e) {}
-  fetch(`${API_BASE}/api/auth/logout`, { method: "POST", headers: getToken() ? { Authorization: `Bearer ${getToken()}` } : {} })
+  fetch(`${API_BASE}/api/auth/logout`, { method: "POST", headers: token ? { Authorization: `Bearer ${token}` } : {} })
     .finally(() => { window.location.href = "/"; });
+}
+
+
+async function loadOperatorVoice() {
+  const token = $("operatorAdminToken").value.trim();
+  const groupTag = $("operatorGroupTag").value.trim();
+  const qs = new URLSearchParams();
+  if (groupTag) qs.set('group_tag', groupTag);
+  const resp = await fetch(`${API_BASE}/api/operator/voice/recent?${qs.toString()}`, { headers: { 'X-Admin-Token': token } });
+  if (!resp.ok) return;
+  const data = await resp.json();
+  let host = document.getElementById('operatorVoiceList');
+  if (!host) {
+    const c=document.createElement('div'); c.className='card'; c.innerHTML='<div class="card-title">Voice/CB</div><div id="operatorVoiceList"></div>';
+    document.getElementById('operatorScreen')?.appendChild(c); host=document.getElementById('operatorVoiceList');
+  }
+  host.innerHTML=(data.items||[]).map(i=>`<div style="margin:8px 0;">#${i.id} driver:${i.driver_id} <button data-reply="${i.id}" class="outline">Reply</button></div>`).join('')||'No voice';
+  host.querySelectorAll('button[data-reply]').forEach(btn=>btn.onclick=()=>replyOperatorVoice(btn.getAttribute('data-reply')));
+}
+
+async function replyOperatorVoice(id) {
+  const token = $("operatorAdminToken").value.trim();
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const chunks=[];
+  const rec = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+  rec.ondataavailable=e=>{ if(e.data?.size) chunks.push(e.data); };
+  rec.onstop=async()=>{
+    stream.getTracks().forEach(t=>t.stop());
+    const form=new FormData();
+    form.append('file', new Blob(chunks,{type:'audio/webm'}), `reply-${Date.now()}.webm`);
+    form.append('note','reply');
+    const r=await fetch(`${API_BASE}/api/operator/voice/${id}/reply`, { method:'POST', headers:{'X-Admin-Token':token}, body:form });
+    if(r.ok) toast('Reply sent'); else toast('Reply failed');
+  };
+  rec.start();
+  setTimeout(()=>{ if(rec.state==='recording') rec.stop(); }, 5000);
 }
 
 window.addEventListener("DOMContentLoaded", () => {
   renderAuthState();
   updateRequestCodeButton();
   tripActive = !!localStorage.getItem("current_trip_id");
+  applyBranding();
+  if (getToken()) startCbInboxPolling();
 
   if (isOperatorMode()) {
-    $("btnLoadOperator")?.addEventListener("click", loadOperatorDashboard);
+    $("btnLoadOperator")?.addEventListener("click", async () => { await loadOperatorDashboard(); await loadOperatorVoice(); });
     initOperatorMap();
+    applyBranding();
     return;
   }
 

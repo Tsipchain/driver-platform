@@ -47,6 +47,8 @@ def _run_sqlite_migrations() -> None:
         conn.execute(text("CREATE TABLE IF NOT EXISTS sessions (id INTEGER PRIMARY KEY, driver_id INTEGER NOT NULL, token TEXT NOT NULL UNIQUE, created_at DATETIME NOT NULL, last_seen_at DATETIME NOT NULL, FOREIGN KEY(driver_id) REFERENCES drivers(id))"))
         conn.execute(text("CREATE TABLE IF NOT EXISTS revoked_tokens (id INTEGER PRIMARY KEY, token TEXT NOT NULL UNIQUE, revoked_at DATETIME NOT NULL)"))
         conn.execute(text("CREATE TABLE IF NOT EXISTS certifications (id INTEGER PRIMARY KEY, driver_id INTEGER NOT NULL, cert_type TEXT NOT NULL, cert_ref TEXT NULL, issued_at DATETIME NOT NULL, FOREIGN KEY(driver_id) REFERENCES drivers(id))"))
+        conn.execute(text("CREATE TABLE IF NOT EXISTS tenant_branding (id INTEGER PRIMARY KEY, group_tag TEXT NOT NULL UNIQUE, app_name TEXT NULL, logo_url TEXT NULL, favicon_url TEXT NULL, primary_color TEXT NULL, plan TEXT NOT NULL DEFAULT 'basic', updated_at DATETIME NOT NULL)"))
+        conn.execute(text("CREATE TABLE IF NOT EXISTS operator_tokens (id INTEGER PRIMARY KEY, group_tag TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, role TEXT NOT NULL, created_at DATETIME NOT NULL, last_used_at DATETIME NULL)"))
 
         driver_columns = _table_columns(conn, "drivers")
         alterations = {
@@ -93,10 +95,23 @@ def _run_sqlite_migrations() -> None:
         conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_revoked_tokens_token ON revoked_tokens(token)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_certifications_driver_id ON certifications(driver_id)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_trips_group_tag ON trips(group_tag)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_tenant_branding_group_tag ON tenant_branding(group_tag)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_operator_tokens_group_tag ON operator_tokens(group_tag)"))
 
-        conn.execute(text("CREATE TABLE IF NOT EXISTS voice_messages (id INTEGER PRIMARY KEY, driver_id INTEGER NOT NULL, trip_id INTEGER NULL, file_path TEXT NOT NULL, duration_sec REAL NULL, target TEXT NULL, note TEXT NULL, status TEXT NOT NULL, created_at DATETIME NOT NULL, FOREIGN KEY(driver_id) REFERENCES drivers(id), FOREIGN KEY(trip_id) REFERENCES trips(id))"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_voice_messages_driver_id ON voice_messages(driver_id)"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_voice_messages_created_at ON voice_messages(created_at)"))
+        conn.execute(text("CREATE TABLE IF NOT EXISTS voice_messages (id INTEGER PRIMARY KEY, driver_id INTEGER NOT NULL, trip_id INTEGER NULL, file_path TEXT NOT NULL, duration_sec REAL NULL, target TEXT NULL, note TEXT NULL, status TEXT NOT NULL, direction TEXT NOT NULL DEFAULT 'up', in_reply_to INTEGER NULL, read_at DATETIME NULL, group_tag TEXT NULL, created_at DATETIME NOT NULL, FOREIGN KEY(driver_id) REFERENCES drivers(id), FOREIGN KEY(trip_id) REFERENCES trips(id))"))
+        voice_columns = _table_columns(conn, "voice_messages")
+        voice_alterations = {
+            "direction": "ALTER TABLE voice_messages ADD COLUMN direction TEXT NOT NULL DEFAULT 'up'",
+            "in_reply_to": "ALTER TABLE voice_messages ADD COLUMN in_reply_to INTEGER",
+            "read_at": "ALTER TABLE voice_messages ADD COLUMN read_at DATETIME",
+            "group_tag": "ALTER TABLE voice_messages ADD COLUMN group_tag TEXT",
+        }
+        for col, ddl in voice_alterations.items():
+            if col not in voice_columns:
+                conn.execute(text(ddl))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_voice_messages_group_tag ON voice_messages(group_tag)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_voice_messages_driver_id ON voice_messages(driver_id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_voice_messages_created_at ON voice_messages(created_at)"))
 
 
 def init_db() -> None:
