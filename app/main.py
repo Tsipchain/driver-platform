@@ -45,6 +45,12 @@ def normalize_phone(phone: str) -> str:
     return cleaned
 
 
+
+def slugify_text(value: str) -> str:
+    base = re.sub(r"[^a-z0-9]+", "-", (value or "").strip().lower())
+    base = re.sub(r"-+", "-", base).strip("-")
+    return base or f"org-{secrets.token_hex(3)}"
+
 def mask_value(email: Optional[str], phone: str) -> str:
     if email:
         parts = email.split("@")
@@ -307,22 +313,27 @@ def _hash_token(raw: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def _resolve_operator_scope(db: Session, x_admin_token: Optional[str]) -> Optional[str]:
-    token = (x_admin_token or "").strip()
+def _resolve_operator_scope(db: Session, token: Optional[str]) -> tuple[Optional[str], Optional[int]]:
     if not token:
-        return None
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    token = token.strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
     global_token = _get_admin_token()
     if global_token and token == global_token:
-        return None  # full access
+        return None, None  # full access
 
     hashed = _hash_token(token)
     row = db.query(models.OperatorToken).filter(models.OperatorToken.token_hash == hashed).first()
     if not row:
         raise HTTPException(status_code=401, detail="Unauthorized")
+    if row.expires_at and row.expires_at < datetime.utcnow():
+        raise HTTPException(status_code=401, detail="Token expired")
     row.last_used_at = datetime.utcnow()
     db.commit()
-    return row.group_tag
+    return row.group_tag, row.organization_id
 
 
 def _branding_defaults(group_tag: Optional[str]) -> dict:
@@ -424,8 +435,20 @@ def request_code(req: schemas.AuthRequestCode, db: Session = Depends(get_db)):
         email=req.email,
         name=req.name,
         role=req.role,
-        group_tag=(req.group_tag or "").strip() or None,
+        group_tag=None,
+        organization_id=req.organization_id,
     )
+    if req.organization_id:
+        org = crud.get_organization(db, int(req.organization_id))
+        if not org or org.status != "active":
+            raise HTTPException(status_code=400, detail="Invalid organization")
+        driver.organization_id = org.id
+        driver.approved = False
+        driver.group_tag = None
+        member = crud.get_org_member(db, org.id, driver.id)
+        if not member:
+            member = models.OrganizationMember(organization_id=org.id, driver_id=driver.id, role="driver", approved=False, created_at=datetime.utcnow())
+            db.add(member)
     now = datetime.utcnow()
     cooldown_seconds = 120
 
@@ -498,7 +521,7 @@ def verify_code(req: schemas.AuthVerifyCode, db: Session = Depends(get_db)):
     crud.create_session_token(db, driver_id=driver.id, token=token)
     return {
         "ok": True,
-        "driver": {"id": driver.id, "name": driver.name, "role": driver.role, "phone": driver.phone, "group_tag": driver.group_tag, "approved": bool(driver.approved)},
+        "driver": {"id": driver.id, "name": driver.name, "role": driver.role, "phone": driver.phone, "group_tag": driver.group_tag, "organization_id": driver.organization_id, "approved": bool(driver.approved)},
         "session_token": token,
     }
 
@@ -524,6 +547,7 @@ def me(current_driver: Driver = Depends(get_current_driver), db: Session = Depen
         "wallet_address": current_driver.wallet_address,
         "company_token_symbol": current_driver.company_token_symbol,
         "group_tag": current_driver.group_tag,
+        "organization_id": current_driver.organization_id,
         "approved": bool(current_driver.approved),
         "company_name": current_driver.company_name,
         "stats": {
@@ -669,14 +693,131 @@ def api_recent_voice_messages(
     return {"items": out}
 
 
+@app.get("/api/organizations", response_model=List[schemas.OrganizationRead])
+def api_list_organizations(
+    type: Optional[str] = None,
+    status: Optional[str] = "active",
+    db: Session = Depends(get_db),
+):
+    return crud.list_organizations(db, org_type=type, status=status)
+
+
+@app.post("/api/organizations/request")
+def api_organization_request(req: schemas.OrganizationRequestCreate, db: Session = Depends(get_db)):
+    slug = slugify_text(req.name)
+    existing = db.query(models.OrganizationRequest).filter(models.OrganizationRequest.slug == slug).first()
+    if existing:
+        return {"ok": True, "id": existing.id, "status": existing.status}
+    row = models.OrganizationRequest(
+        name=req.name.strip(),
+        slug=slug,
+        city=(req.city or "").strip() or None,
+        contact_email=(req.contact_email or "").strip() or None,
+        type=req.type or "taxi",
+        status="pending",
+        created_at=datetime.utcnow(),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {"ok": True, "id": row.id, "status": row.status}
+
+
+@app.post("/api/organizations/{organization_id}/approve")
+def api_organization_approve(
+    organization_id: int,
+    x_admin_token: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    _resolve_operator_scope(db, x_admin_token)
+    row = crud.get_organization(db, organization_id)
+    if not row:
+        req = db.query(models.OrganizationRequest).filter(models.OrganizationRequest.id == organization_id).first()
+        if not req:
+            raise HTTPException(status_code=404, detail="Organization not found")
+        row = models.Organization(
+            name=req.name,
+            slug=req.slug,
+            type=req.type,
+            status="active",
+            default_group_tag=req.slug + "-a",
+            title=req.name,
+            created_at=datetime.utcnow(),
+        )
+        req.status = "approved"
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return {"ok": True, "organization_id": row.id, "status": row.status}
+    row.status = "active"
+    db.commit()
+    return {"ok": True, "organization_id": row.id, "status": row.status}
+
+
+@app.post("/api/organizations/{organization_id}/join")
+def api_organization_join(
+    organization_id: int,
+    current_driver: Driver = Depends(get_current_driver),
+    db: Session = Depends(get_db),
+):
+    org = crud.get_organization(db, organization_id)
+    if not org or org.status != "active":
+        raise HTTPException(status_code=404, detail="Organization not found")
+    current_driver.organization_id = org.id
+    current_driver.approved = False
+    current_driver.group_tag = None
+    member = crud.get_org_member(db, org.id, current_driver.id)
+    if not member:
+        member = models.OrganizationMember(organization_id=org.id, driver_id=current_driver.id, role="driver", approved=False, created_at=datetime.utcnow())
+        db.add(member)
+    db.commit()
+    return {"ok": True, "pending": True}
+
+
+@app.post("/api/organizations/{organization_id}/members/{driver_id}/approve")
+def api_organization_member_approve(
+    organization_id: int,
+    driver_id: int,
+    x_admin_token: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    forced_group, forced_org = _resolve_operator_scope(db, x_admin_token)
+    if forced_org and forced_org != organization_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    org = crud.get_organization(db, organization_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    if forced_group and org.default_group_tag != forced_group:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    driver = crud.get_driver(db, driver_id)
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+    member = crud.get_org_member(db, organization_id, driver_id)
+    if not member:
+        member = models.OrganizationMember(organization_id=organization_id, driver_id=driver_id, role="driver", approved=True, created_at=datetime.utcnow())
+        db.add(member)
+    member.approved = True
+    driver.organization_id = organization_id
+    driver.group_tag = org.default_group_tag
+    driver.approved = True
+    db.commit()
+    return {"ok": True, "driver_id": driver_id, "approved": True, "group_tag": driver.group_tag}
+
+
 @app.get("/api/operator/dashboard")
 def api_operator_dashboard(
     group_tag: Optional[str] = None,
     x_admin_token: Optional[str] = Header(default=None),
     db: Session = Depends(get_db),
 ):
-    forced_group = _resolve_operator_scope(db, x_admin_token)
-    effective_group = forced_group or group_tag
+    forced_group, forced_org = _resolve_operator_scope(db, x_admin_token)
+    if forced_org:
+        org = crud.get_organization(db, forced_org)
+        effective_group = (org.default_group_tag if org else None) or forced_group
+    else:
+        effective_group = forced_group or group_tag
+    if forced_org and driver.organization_id != forced_org:
+        raise HTTPException(status_code=403, detail="Forbidden")
     return crud.get_operator_dashboard(db, group_tag=effective_group)
 
 
@@ -686,9 +827,11 @@ def api_operator_pending_drivers(
     x_admin_token: Optional[str] = Header(default=None),
     db: Session = Depends(get_db),
 ):
-    forced_group = _resolve_operator_scope(db, x_admin_token)
+    forced_group, forced_org = _resolve_operator_scope(db, x_admin_token)
     effective_group = forced_group or group_tag
     q = db.query(models.Driver).filter(models.Driver.approved == False)
+    if forced_org:
+        q = q.filter(models.Driver.organization_id == forced_org)
     if effective_group:
         q = q.filter(models.Driver.group_tag == effective_group)
     rows = q.order_by(models.Driver.created_at.desc()).limit(200).all()
@@ -702,12 +845,14 @@ def api_operator_approve_driver(
     x_admin_token: Optional[str] = Header(default=None),
     db: Session = Depends(get_db),
 ):
-    forced_group = _resolve_operator_scope(db, x_admin_token)
+    forced_group, forced_org = _resolve_operator_scope(db, x_admin_token)
     driver = crud.get_driver(db, driver_id)
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
     effective_group = forced_group or group_tag
-    if effective_group and driver.group_tag != effective_group:
+    if forced_org and driver.organization_id != forced_org:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if effective_group and driver.group_tag and driver.group_tag != effective_group:
         raise HTTPException(status_code=403, detail="Forbidden")
     driver.approved = True
     db.commit()
@@ -721,8 +866,12 @@ def api_operator_recent_events(
     x_admin_token: Optional[str] = Header(default=None),
     db: Session = Depends(get_db),
 ):
-    forced_group = _resolve_operator_scope(db, x_admin_token)
-    effective_group = forced_group or group_tag
+    forced_group, forced_org = _resolve_operator_scope(db, x_admin_token)
+    if forced_org:
+        org = crud.get_organization(db, forced_org)
+        effective_group = (org.default_group_tag if org else None) or forced_group
+    else:
+        effective_group = forced_group or group_tag
     return {"events": crud.get_recent_operator_events(db, group_tag=effective_group, limit=limit)}
 
 
@@ -807,9 +956,11 @@ def api_operator_voice_inbox(
     x_admin_token: Optional[str] = Header(default=None),
     db: Session = Depends(get_db),
 ):
-    forced_group = _resolve_operator_scope(db, x_admin_token)
+    forced_group, forced_org = _resolve_operator_scope(db, x_admin_token)
     effective_group = forced_group or group_tag
     q = db.query(models.VoiceMessage).filter(models.VoiceMessage.target == "center")
+    if forced_org:
+        q = q.join(models.Driver, models.Driver.id == models.VoiceMessage.driver_id).filter(models.Driver.organization_id == forced_org)
     if effective_group:
         q = q.filter(models.VoiceMessage.group_tag == effective_group)
     rows = q.order_by(models.VoiceMessage.created_at.desc()).limit(limit).all()
@@ -826,9 +977,11 @@ def api_operator_voice_recent(
     x_admin_token: Optional[str] = Header(default=None),
     db: Session = Depends(get_db),
 ):
-    forced_group = _resolve_operator_scope(db, x_admin_token)
+    forced_group, forced_org = _resolve_operator_scope(db, x_admin_token)
     effective_group = forced_group or group_tag
     q = db.query(models.VoiceMessage).filter(models.VoiceMessage.direction == "up")
+    if forced_org:
+        q = q.join(models.Driver, models.Driver.id == models.VoiceMessage.driver_id).filter(models.Driver.organization_id == forced_org)
     if effective_group:
         q = q.filter(models.VoiceMessage.group_tag == effective_group)
     rows = q.order_by(models.VoiceMessage.created_at.desc()).limit(limit).all()
@@ -844,7 +997,7 @@ async def api_operator_voice_send(
     x_admin_token: Optional[str] = Header(default=None),
     db: Session = Depends(get_db),
 ):
-    forced_group = _resolve_operator_scope(db, x_admin_token)
+    forced_group, forced_org = _resolve_operator_scope(db, x_admin_token)
     if "multipart/form-data" not in (request.headers.get("content-type") or ""):
         raise HTTPException(status_code=400, detail="Expected multipart/form-data")
 
@@ -858,6 +1011,8 @@ async def api_operator_voice_send(
         if not target_driver:
             raise HTTPException(status_code=404, detail="Driver not found")
         if forced_group and target_driver.group_tag != forced_group:
+            raise HTTPException(status_code=403, detail="Forbidden")
+        if forced_org and target_driver.organization_id != forced_org:
             raise HTTPException(status_code=403, detail="Forbidden")
         target_group = target_driver.group_tag or target_group
     elif target_group:
@@ -908,7 +1063,7 @@ async def api_operator_voice_reply(
     x_admin_token: Optional[str] = Header(default=None),
     db: Session = Depends(get_db),
 ):
-    forced_group = _resolve_operator_scope(db, x_admin_token)
+    forced_group, forced_org = _resolve_operator_scope(db, x_admin_token)
     parent = db.query(models.VoiceMessage).filter(models.VoiceMessage.id == msg_id).first()
     if not parent:
         raise HTTPException(status_code=404, detail="Message not found")
@@ -985,7 +1140,7 @@ def api_voice_download(
             if sess and sess.driver_id == row.driver_id:
                 return FileResponse(row.file_path)
 
-    forced_group = _resolve_operator_scope(db, x_admin_token)
+    forced_group, forced_org = _resolve_operator_scope(db, x_admin_token)
     if forced_group is not None and row.group_tag != forced_group:
         raise HTTPException(status_code=403, detail="Forbidden")
     if x_admin_token:

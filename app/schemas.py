@@ -14,6 +14,8 @@ class DriverBase(BaseModel):
     notes: Optional[str] = None
     company_name: Optional[str] = None
     group_tag: Optional[str] = None
+    organization_id: Optional[int] = None
+    organization_id: Optional[int] = None
 
 
 class DriverCreate(DriverBase):
@@ -121,6 +123,7 @@ class AuthRequestCode(BaseModel):
     name: Optional[str] = None
     role: Optional[str] = "taxi"
     group_tag: Optional[str] = None
+    organization_id: Optional[int] = None
 
 
 class AuthVerifyCode(BaseModel):
@@ -151,3 +154,30 @@ class VoiceMessageRead(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class OrganizationRead(BaseModel):
+    id: int
+    name: str
+    slug: str
+    type: str
+    status: str
+    default_group_tag: Optional[str] = None
+    title: Optional[str] = None
+    logo_url: Optional[str] = None
+    favicon_url: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class OrganizationRequestCreate(BaseModel):
+    name: str
+    city: Optional[str] = None
+    contact_email: Optional[str] = None
+    type: str = "taxi"
+
+
+class OrganizationJoinRequest(BaseModel):
+    organization_id: int
+

@@ -24,6 +24,8 @@
         <div class="field-group"><label for="loginPhone">Κινητό τηλέφωνο</label><input id="loginPhone" placeholder="π.χ. 69XXXXXXXX" /></div>
         <div class="field-group"><label for="loginEmail">Email (προαιρετικό)</label><input id="loginEmail" placeholder="name@example.com" /></div>
         <div class="field-group"><label for="loginName">Όνομα (προαιρετικό)</label><input id="loginName" placeholder="π.χ. Γιώργος" /></div>
+        <div class="field-group"><label for="loginOrganization">Φορέας (προαιρετικό)</label><select id="loginOrganization"><option value="">— Ελεύθερος επαγγελματίας —</option></select></div>
+        <button class="outline full" id="btnRequestOrg">+ Αίτημα νέου φορέα</button>
         <button class="primary full" id="btnSendCode">Αποστολή κωδικού</button>
 
         <div class="field-group" id="codeWrap" style="display:none; margin-top:10px;">
@@ -32,6 +34,15 @@
           <button class="primary full" id="btnVerifyCode">Επιβεβαίωση</button>
         </div>
         <div class="small-text" id="authMessage"></div>
+      </div>
+
+      <div id="requestOrgModal" class="card" style="display:none;">
+        <div class="card-header"><div class="card-title">Αίτημα νέου φορέα</div><button class="outline" id="btnCloseRequestOrg">Κλείσιμο</button></div>
+        <div class="field-group"><label for="orgReqName">Όνομα φορέα</label><input id="orgReqName" /></div>
+        <div class="field-group"><label for="orgReqCity">Πόλη</label><input id="orgReqCity" /></div>
+        <div class="field-group"><label for="orgReqEmail">Email επικοινωνίας</label><input id="orgReqEmail" /></div>
+        <button class="primary full" id="btnSubmitRequestOrg">Αποστολή αιτήματος</button>
+        <div class="small-text" id="orgReqMsg"></div>
       </div>
 
       <div id="dashboardScreen" style="display:none;">

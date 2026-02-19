@@ -10,6 +10,7 @@ let operatorMarkers = [];
 let tripActive = false;
 let cbInboxTimer = null;
 let autoGpsWatchId = null;
+let autoGpsSendTimer = null;
 let lastGpsPoint = null;
 const DEFAULT_FAVICON = "https://thronoschain.org/thronos-coin.png";
 
@@ -54,6 +55,43 @@ async function applyBranding() {
   } catch (_) {}
 }
 
+
+
+async function loadOrganizations() {
+  const sel = $("loginOrganization");
+  if (!sel) return;
+  try {
+    const resp = await fetch(`${API_BASE}/api/organizations?status=active`);
+    if (!resp.ok) return;
+    const items = await resp.json();
+    sel.innerHTML = '<option value="">— Ελεύθερος επαγγελματίας —</option>' + (items || []).map(o => `<option value="${o.id}">${o.name}</option>`).join('');
+  } catch (_) {}
+}
+
+function openRequestOrgModal() {
+  if ($("requestOrgModal")) $("requestOrgModal").style.display = "block";
+  if ($("loginScreen")) $("loginScreen").style.display = "none";
+}
+
+function closeRequestOrgModal() {
+  if ($("requestOrgModal")) $("requestOrgModal").style.display = "none";
+  if ($("loginScreen") && !getToken()) $("loginScreen").style.display = "block";
+}
+
+async function submitOrganizationRequest() {
+  const payload = {
+    name: $("orgReqName")?.value.trim(),
+    city: $("orgReqCity")?.value.trim() || null,
+    contact_email: $("orgReqEmail")?.value.trim() || null,
+    type: "taxi",
+  };
+  const resp = await fetch(`${API_BASE}/api/organizations/request`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  $("orgReqMsg").textContent = resp.ok ? "Το αίτημα καταχωρήθηκε." : "Αποτυχία αιτήματος.";
+}
 
 function updateRequestCodeButton() {
   const btn = $("btnSendCode");
@@ -126,6 +164,7 @@ function renderAuthState() {
   $("loginScreen").style.display = hasToken ? "none" : "block";
   const sendBtn = $("btnSendCode"); if (sendBtn) sendBtn.style.display = hasToken ? "none" : "inline-flex";
   $("dashboardScreen").style.display = hasToken ? "block" : "none";
+  if ($("requestOrgModal")) $("requestOrgModal").style.display = "none";
   $("profileScreen").style.display = "none";
   $("operatorScreen").style.display = "none";
   if (hasToken) updateHeaderProfile();
@@ -181,7 +220,7 @@ async function requestCode() {
     email: $("loginEmail").value.trim() || null,
     name: $("loginName").value.trim() || null,
     role: "taxi",
-    group_tag: new URLSearchParams(window.location.search).get("group_tag") || null,
+    organization_id: $("loginOrganization")?.value ? Number($("loginOrganization").value) : null,
   };
 
   const resp = await apiFetch("/api/auth/request-code", { method: "POST", body: JSON.stringify(payload), skipUnauthorizedRedirect: true });
@@ -236,6 +275,7 @@ async function finishTrip() {
   $("tripStatus").textContent = `Trip #${data.id} ολοκληρώθηκε`;
   localStorage.removeItem("current_trip_id");
   tripActive = false;
+  stopAutoGps();
 }
 
 async function sendTelemetry() {
@@ -256,6 +296,12 @@ async function sendTelemetry() {
   const resp = await apiFetch("/api/v1/telemetry", { method: "POST", body: JSON.stringify(payload) });
   if (!resp.ok) return toast("Σφάλμα αποστολής telemetry.");
   $("telemetryNotes").value = "";
+}
+
+
+async function sendTelemetrySnapshot() {
+  if (!tripActive) return;
+  await sendTelemetry();
 }
 
 async function startVoiceRecording() {
@@ -471,11 +517,16 @@ function startAutoGps() {
   }, (err) => {
     updateAutoGpsStatus(`Auto GPS error: ${err.message}`);
   }, { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 });
+
+  if (autoGpsSendTimer) clearInterval(autoGpsSendTimer);
+  autoGpsSendTimer = setInterval(() => { sendTelemetrySnapshot().catch(() => {}); }, 8000);
 }
 
 function stopAutoGps() {
   if (autoGpsWatchId) navigator.geolocation.clearWatch(autoGpsWatchId);
+  if (autoGpsSendTimer) clearInterval(autoGpsSendTimer);
   autoGpsWatchId = null;
+  autoGpsSendTimer = null;
   lastGpsPoint = null;
   updateAutoGpsStatus("Auto GPS: OFF");
 }
@@ -504,6 +555,7 @@ async function loadPendingDrivers() {
 window.addEventListener("DOMContentLoaded", () => {
   renderAuthState();
   updateRequestCodeButton();
+  loadOrganizations();
   tripActive = !!localStorage.getItem("current_trip_id");
   applyBranding();
   if (getToken()) startCbInboxPolling();
@@ -516,6 +568,9 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   $("btnSendCode")?.addEventListener("click", requestCode);
+  $("btnRequestOrg")?.addEventListener("click", openRequestOrgModal);
+  $("btnCloseRequestOrg")?.addEventListener("click", closeRequestOrgModal);
+  $("btnSubmitRequestOrg")?.addEventListener("click", submitOrganizationRequest);
   $("btnVerifyCode")?.addEventListener("click", verifyCode);
   $("btnStartTrip")?.addEventListener("click", startTrip);
   $("btnFinishTrip")?.addEventListener("click", finishTrip);
