@@ -8,6 +8,7 @@ import socket
 from pathlib import Path
 from datetime import datetime, timedelta
 from email.message import EmailMessage
+from email.utils import make_msgid, parseaddr
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
@@ -91,16 +92,36 @@ def _smtp_configured() -> bool:
     return all((os.getenv(key) or "").strip() for key in required)
 
 
+def _b2s(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
 def send_code_via_email(email: str, code: str, name_or_phone: str) -> bool:
     if not email or not _smtp_enabled() or not _smtp_configured():
         return False
 
-    smtp_from = (os.getenv("DRIVER_SMTP_FROM") or "").strip()
+    smtp_host = os.getenv("DRIVER_SMTP_HOST", "").strip()
+    smtp_port = int(os.getenv("DRIVER_SMTP_PORT", "465"))
+    smtp_user = os.getenv("DRIVER_SMTP_USER", "")
+    smtp_password = os.getenv("DRIVER_SMTP_PASSWORD", "")
+    smtp_from = (os.getenv("DRIVER_SMTP_FROM") or smtp_user).strip()
+    use_ssl = os.getenv("DRIVER_SMTP_USE_SSL", "true").lower() in ("1", "true", "yes")
+    timeout = int(os.getenv("DRIVER_SMTP_TIMEOUT", "10"))
+
+    from_addr = parseaddr(smtp_from)[1] or smtp_user
+    to_addr = parseaddr(email)[1] or email
+    from_domain = parseaddr(smtp_from)[1].split("@")[-1] if "@" in parseaddr(smtp_from)[1] else "thronoschain.org"
+    msg_id = make_msgid(domain=from_domain)
 
     msg = EmailMessage()
     msg["Subject"] = "[Thronos Driver] Κωδικός σύνδεσης / Login code"
     msg["From"] = smtp_from
     msg["To"] = email
+    msg["Message-ID"] = msg_id
     msg.set_content(
         f"""Γεια σου {name_or_phone},
 
@@ -129,40 +150,67 @@ If you did not request this code, you can safely ignore this email.
 """
     )
 
-    message_id = msg.get("Message-ID")
-
-    smtp_host = os.getenv("DRIVER_SMTP_HOST", "").strip()
-    smtp_port = int(os.getenv("DRIVER_SMTP_PORT", "465"))
-    smtp_user = os.getenv("DRIVER_SMTP_USER", "")
-    smtp_password = os.getenv("DRIVER_SMTP_PASSWORD", "")
-    use_ssl = os.getenv("DRIVER_SMTP_USE_SSL", "true").lower() in ("1", "true", "yes")
-    timeout = int(os.getenv("DRIVER_SMTP_TIMEOUT", "10"))
-
     try:
+        logger.info("SMTP connect: host=%s port=%s ssl=%s msg_id=%s", smtp_host, smtp_port, use_ssl, msg_id)
         if use_ssl:
-            with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=timeout) as server:
-                ehlo_resp = server.ehlo()
-                logger.info("SMTP response EHLO: %s", ehlo_resp)
-                login_resp = server.login(smtp_user, smtp_password)
-                logger.info("SMTP response LOGIN: %s", login_resp)
-                send_resp = server.send_message(msg)
-                logger.info("SMTP response SEND: %s", send_resp)
+            server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=timeout)
         else:
-            with smtplib.SMTP(smtp_host, smtp_port, timeout=timeout) as server:
-                ehlo_resp = server.ehlo()
-                logger.info("SMTP response EHLO: %s", ehlo_resp)
-                tls_resp = server.starttls()
-                logger.info("SMTP response STARTTLS: %s", tls_resp)
-                ehlo_after_tls = server.ehlo()
-                logger.info("SMTP response EHLO_AFTER_TLS: %s", ehlo_after_tls)
-                login_resp = server.login(smtp_user, smtp_password)
-                logger.info("SMTP response LOGIN: %s", login_resp)
-                send_resp = server.send_message(msg)
-                logger.info("SMTP response SEND: %s", send_resp)
-        logger.info("OTP email sent: to=%s host=%s port=%s ssl=%s message_id=%s send_response=%s", email, smtp_host, smtp_port, use_ssl, message_id, send_resp if "send_resp" in locals() else None)
-        return True
-    except (smtplib.SMTPException, socket.error) as e:
-        logger.exception("SMTP send failure to=%s host=%s port=%s ssl=%s -> %s", email, smtp_host, smtp_port, use_ssl, str(e))
+            server = smtplib.SMTP(smtp_host, smtp_port, timeout=timeout)
+
+        with server:
+            ehlo_code, ehlo_resp = server.ehlo()
+            logger.info("SMTP EHLO: code=%s resp=%s", ehlo_code, _b2s(ehlo_resp).strip()[:250])
+
+            if not use_ssl:
+                tls_code, tls_resp = server.starttls()
+                logger.info("SMTP STARTTLS: code=%s resp=%s", tls_code, _b2s(tls_resp).strip()[:250])
+                ehlo2_code, ehlo2_resp = server.ehlo()
+                logger.info("SMTP EHLO2: code=%s resp=%s", ehlo2_code, _b2s(ehlo2_resp).strip()[:250])
+
+            login_code, login_resp = server.login(smtp_user, smtp_password)
+            logger.info("SMTP LOGIN: code=%s resp=%s", login_code, _b2s(login_resp).strip()[:250])
+
+            mail_code, mail_resp = server.mail(from_addr)
+            logger.info("SMTP MAIL FROM: code=%s resp=%s from=%s", mail_code, _b2s(mail_resp).strip()[:250], from_addr)
+
+            rcpt_code, rcpt_resp = server.rcpt(to_addr)
+            logger.info("SMTP RCPT TO: code=%s resp=%s to=%s", rcpt_code, _b2s(rcpt_resp).strip()[:250], to_addr)
+
+            data_code, data_resp = server.data(msg.as_bytes())
+            data_resp_text = _b2s(data_resp).strip()[:250]
+            logger.info("SMTP DATA: code=%s resp=%s msg_id=%s", data_code, data_resp_text, msg_id)
+
+            if 200 <= int(data_code) < 300:
+                logger.info(
+                    "OTP email accepted by relay: to=%s host=%s port=%s ssl=%s msg_id=%s",
+                    email,
+                    smtp_host,
+                    smtp_port,
+                    use_ssl,
+                    msg_id,
+                )
+                return True
+
+            logger.error(
+                "SMTP not accepted: code=%s resp=%s host=%s port=%s ssl=%s msg_id=%s",
+                data_code,
+                data_resp_text,
+                smtp_host,
+                smtp_port,
+                use_ssl,
+                msg_id,
+            )
+            return False
+    except (smtplib.SMTPException, socket.error, OSError) as exc:
+        logger.exception(
+            "SMTP send failure: to=%s host=%s port=%s ssl=%s msg_id=%s err=%s",
+            email,
+            smtp_host,
+            smtp_port,
+            use_ssl,
+            msg_id,
+            str(exc),
+        )
         return False
 
 
