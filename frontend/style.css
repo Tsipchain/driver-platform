@@ -210,3 +210,7 @@ button .dot {
   font-size: 11px;
   color: var(--muted);
 }
+
+.disabled {
+  opacity: 0.55;
+}
