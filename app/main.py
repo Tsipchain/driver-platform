@@ -129,6 +129,8 @@ If you did not request this code, you can safely ignore this email.
 """
     )
 
+    message_id = msg.get("Message-ID")
+
     smtp_host = os.getenv("DRIVER_SMTP_HOST", "").strip()
     smtp_port = int(os.getenv("DRIVER_SMTP_PORT", "465"))
     smtp_user = os.getenv("DRIVER_SMTP_USER", "")
@@ -157,7 +159,7 @@ If you did not request this code, you can safely ignore this email.
                 logger.info("SMTP response LOGIN: %s", login_resp)
                 send_resp = server.send_message(msg)
                 logger.info("SMTP response SEND: %s", send_resp)
-        logger.info("OTP email sent: to=%s via %s:%s (ssl=%s)", email, smtp_host, smtp_port, use_ssl)
+        logger.info("OTP email sent: to=%s host=%s port=%s ssl=%s message_id=%s send_response=%s", email, smtp_host, smtp_port, use_ssl, message_id, send_resp if "send_resp" in locals() else None)
         return True
     except (smtplib.SMTPException, socket.error) as e:
         logger.exception("SMTP send failure to=%s host=%s port=%s ssl=%s -> %s", email, smtp_host, smtp_port, use_ssl, str(e))
@@ -253,6 +255,7 @@ def _branding_defaults(group_tag: Optional[str]) -> dict:
         "group_tag": group_tag,
         "plan": "basic",
         "app_name": "Thronos Driver",
+        "title": "Thronos Driver",
         "logo_url": "https://thronoschain.org/thronos-decentralize.png",
         "favicon_url": "https://thronoschain.org/thronos-coin.png",
         "primary_color": "#00ff88",
@@ -593,6 +596,7 @@ def api_branding(group_tag: Optional[str] = None, db: Session = Depends(get_db))
     defaults.update({
         "plan": row.plan or defaults["plan"],
         "app_name": row.app_name or defaults["app_name"],
+        "title": row.app_name or defaults["title"],
         "logo_url": row.logo_url or defaults["logo_url"],
         "favicon_url": row.favicon_url or defaults["favicon_url"],
         "primary_color": row.primary_color or defaults["primary_color"],

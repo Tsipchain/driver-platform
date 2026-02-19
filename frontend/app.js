@@ -34,7 +34,7 @@ async function applyBranding() {
     const resp = await fetch(`${API_BASE}/api/branding${qs}`);
     if (!resp.ok) return;
     const b = await resp.json();
-    document.title = b.app_name || 'Thronos Driver';
+    document.title = b.title || b.app_name || 'Thronos Driver';
     const favicon = document.getElementById('faviconLink');
     if (favicon && b.favicon_url) favicon.href = b.favicon_url;
     if (b.primary_color) document.documentElement.style.setProperty('--accent', b.primary_color);
