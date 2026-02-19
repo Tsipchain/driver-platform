@@ -310,7 +310,7 @@ def _branding_defaults(group_tag: Optional[str]) -> dict:
     }
 
 
-def _parse_multipart_voice_payload(raw_body: bytes, content_type: str) -> tuple[bytes, str, Optional[int], Optional[str], Optional[str]]:
+def _parse_multipart_voice_payload(raw_body: bytes, content_type: str) -> tuple[bytes, str, Optional[int], Optional[str], Optional[str], Optional[int], Optional[str]]:
     boundary_marker = "boundary="
     if boundary_marker not in content_type:
         raise HTTPException(status_code=400, detail="Invalid multipart payload")
@@ -325,6 +325,8 @@ def _parse_multipart_voice_payload(raw_body: bytes, content_type: str) -> tuple[
     trip_id: Optional[int] = None
     note: Optional[str] = None
     target: Optional[str] = "cb"
+    driver_id: Optional[int] = None
+    group_tag: Optional[str] = None
 
     for part in raw_body.split(delimiter):
         part = part.strip()
@@ -348,11 +350,17 @@ def _parse_multipart_voice_payload(raw_body: bytes, content_type: str) -> tuple[
             note = value.decode("utf-8", errors="ignore").strip() or None
         elif 'name="target"' in headers_text:
             target = value.decode("utf-8", errors="ignore").strip() or "cb"
+        elif 'name="driver_id"' in headers_text:
+            txt = value.decode("utf-8", errors="ignore").strip()
+            if txt:
+                driver_id = int(txt)
+        elif 'name="group_tag"' in headers_text:
+            group_tag = value.decode("utf-8", errors="ignore").strip() or None
 
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Missing file part")
 
-    return file_bytes, filename, trip_id, note, target
+    return file_bytes, filename, trip_id, note, target, driver_id, group_tag
 
 
 
@@ -551,7 +559,7 @@ async def api_create_voice_message(
         raise HTTPException(status_code=400, detail="Expected multipart/form-data")
 
     raw_body = await request.body()
-    file_bytes, incoming_filename, trip_id, note, target = _parse_multipart_voice_payload(raw_body, content_type)
+    file_bytes, incoming_filename, trip_id, note, target, _driver_id, _group_tag = _parse_multipart_voice_payload(raw_body, content_type)
 
     now = datetime.utcnow()
     ts = now.strftime("%Y%m%d%H%M%S%f")
@@ -724,6 +732,59 @@ def api_operator_voice_recent(
     ]}
 
 
+@app.post("/api/operator/voice/send")
+async def api_operator_voice_send(
+    request: Request,
+    x_admin_token: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    forced_group = _resolve_operator_scope(db, x_admin_token)
+    if "multipart/form-data" not in (request.headers.get("content-type") or ""):
+        raise HTTPException(status_code=400, detail="Expected multipart/form-data")
+
+    raw = await request.body()
+    file_bytes, incoming_filename, trip_id, note, _target, payload_driver_id, payload_group_tag = _parse_multipart_voice_payload(raw, request.headers.get("content-type", ""))
+
+    target_group = forced_group or payload_group_tag
+    target_driver = None
+    if payload_driver_id:
+        target_driver = crud.get_driver(db, int(payload_driver_id))
+        if not target_driver:
+            raise HTTPException(status_code=404, detail="Driver not found")
+        if forced_group and target_driver.group_tag != forced_group:
+            raise HTTPException(status_code=403, detail="Forbidden")
+        target_group = target_driver.group_tag or target_group
+    elif target_group:
+        q = db.query(models.Driver).filter(models.Driver.group_tag == target_group)
+        target_driver = q.order_by(models.Driver.last_login_at.desc().nullslast(), models.Driver.created_at.desc()).first()
+        if not target_driver:
+            raise HTTPException(status_code=404, detail="No driver found for group")
+    else:
+        raise HTTPException(status_code=400, detail="driver_id or group_tag required")
+
+    ts = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+    suffix = Path(incoming_filename).suffix or ".webm"
+    ddir = _voice_storage_base() / str(target_driver.id) / "down"
+    ddir.mkdir(parents=True, exist_ok=True)
+    path = ddir / f"{ts}{suffix}"
+    path.write_bytes(file_bytes)
+
+    row = crud.create_voice_message(
+        db,
+        driver_id=target_driver.id,
+        trip_id=trip_id,
+        file_path=str(path),
+        note=note,
+        target="cb",
+        status="received",
+    )
+    row.direction = "to_driver"
+    row.group_tag = target_driver.group_tag or target_group
+    db.commit()
+    db.refresh(row)
+    return {"ok": True, "id": row.id, "driver_id": row.driver_id, "group_tag": row.group_tag}
+
+
 @app.post("/api/operator/voice/{msg_id}/reply")
 async def api_operator_voice_reply(
     msg_id: int,
@@ -741,7 +802,7 @@ async def api_operator_voice_reply(
     if "multipart/form-data" not in (request.headers.get("content-type") or ""):
         raise HTTPException(status_code=400, detail="Expected multipart/form-data")
     raw = await request.body()
-    file_bytes, incoming_filename, _trip_id, note, _target = _parse_multipart_voice_payload(raw, request.headers.get("content-type",""))
+    file_bytes, incoming_filename, _trip_id, note, _target, _driver_id, _group_tag = _parse_multipart_voice_payload(raw, request.headers.get("content-type",""))
 
     ts = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
     suffix = Path(incoming_filename).suffix or ".webm"
@@ -764,7 +825,10 @@ def api_driver_voice_inbox(
     current_driver: Driver = Depends(get_current_driver),
     db: Session = Depends(get_db),
 ):
-    q = db.query(models.VoiceMessage).filter(models.VoiceMessage.driver_id == current_driver.id, models.VoiceMessage.direction == "down")
+    q = db.query(models.VoiceMessage).filter(
+        models.VoiceMessage.driver_id == current_driver.id,
+        models.VoiceMessage.direction.in_(["down", "to_driver"])
+    )
     if since:
         try:
             dt = datetime.fromisoformat(since)
@@ -772,7 +836,7 @@ def api_driver_voice_inbox(
         except Exception:
             pass
     rows = q.order_by(models.VoiceMessage.created_at.desc()).limit(100).all()
-    return {"items": [{"id":r.id,"note":r.note,"created_at":r.created_at,"read_at":r.read_at} for r in rows]}
+    return {"items": [{"id":r.id,"note":r.note,"created_at":r.created_at,"read_at":r.read_at,"from_center":True,"audio_url":f"/api/v1/voice-messages/{r.id}/download"} for r in rows]}
 
 
 @app.post("/api/v1/voice-messages/{msg_id}/ack")

@@ -128,10 +128,18 @@ function renderCbInbox(items) {
     document.getElementById('dashboardScreen')?.appendChild(card);
     box = document.getElementById('cbInbox');
   }
-  box.innerHTML = (items || []).map(i => `<div style="margin-bottom:8px;"><div>${i.note || 'Voice message'} · ${i.created_at || ''}</div><button data-ack="${i.id}" class="outline">Ack</button></div>`).join('') || 'No messages';
+  box.innerHTML = (items || []).map(i => {
+    const audioUrl = i.audio_url || `/api/v1/voice-messages/${i.id}/download`;
+    return `<div style="margin-bottom:10px; padding-bottom:8px; border-bottom:1px solid rgba(255,255,255,0.08);">
+      <div>${i.note || 'Voice message'} · ${i.created_at || ''}</div>
+      <audio controls preload="none" src="${audioUrl}" style="width:100%; margin:6px 0;"></audio>
+      <button data-ack="${i.id}" class="outline">Ack</button>
+    </div>`;
+  }).join('') || 'No messages';
   box.querySelectorAll('button[data-ack]').forEach(b => b.onclick = async () => {
     await apiFetch(`/api/v1/voice-messages/${b.getAttribute('data-ack')}/ack`, { method: 'POST' });
     b.disabled = true;
+    b.textContent = 'Acked';
   });
 }
 
