@@ -345,7 +345,24 @@ def get_recent_operator_events(db: Session, group_tag: Optional[str] = None, lim
 
 
 def revoke_session_token(db: Session, token: str) -> None:
+    create_revoked_token(db, token)
     obj = db.query(models.SessionToken).filter(models.SessionToken.token == token).first()
     if obj:
         db.delete(obj)
         db.commit()
+
+
+def create_revoked_token(db: Session, token: str) -> None:
+    if not token:
+        return
+    existing = db.query(models.RevokedToken).filter(models.RevokedToken.token == token).first()
+    if existing:
+        return
+    db.add(models.RevokedToken(token=token, revoked_at=datetime.utcnow()))
+    db.commit()
+
+
+def is_token_revoked(db: Session, token: str) -> bool:
+    if not token:
+        return False
+    return db.query(models.RevokedToken).filter(models.RevokedToken.token == token).first() is not None

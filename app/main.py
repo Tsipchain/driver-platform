@@ -58,6 +58,9 @@ def is_production_env() -> bool:
 
 
 def dev_show_code_enabled() -> bool:
+    # Never allow OTP logging in production, even if misconfigured
+    if is_production_env():
+        return False
     return (os.getenv("DEV_SHOW_CODE") or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
@@ -168,6 +171,8 @@ def get_current_driver(
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     token = authorization.split(" ", 1)[1].strip()
+    if crud.is_token_revoked(db, token):
+        raise HTTPException(status_code=401, detail="Unauthorized")
     session = crud.get_session_by_token(db, token)
     if not session:
         raise HTTPException(status_code=401, detail="Unauthorized")
@@ -191,6 +196,8 @@ def get_current_driver_optional(
 
     token = authorization.split(" ", 1)[1].strip()
     if not token:
+        return None
+    if crud.is_token_revoked(db, token):
         return None
     session = crud.get_session_by_token(db, token)
     if not session:

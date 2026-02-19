@@ -122,3 +122,23 @@ class VoiceMessage(Base):
 
     driver = relationship("Driver")
     trip = relationship("Trip")
+
+
+class RevokedToken(Base):
+    __tablename__ = "revoked_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    token = Column(String(128), nullable=False, unique=True, index=True)
+    revoked_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class Certification(Base):
+    __tablename__ = "certifications"
+
+    id = Column(Integer, primary_key=True, index=True)
+    driver_id = Column(Integer, ForeignKey("drivers.id"), nullable=False, index=True)
+    cert_type = Column(String(64), nullable=False)
+    cert_ref = Column(String(128), nullable=True)
+    issued_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    driver = relationship("Driver")

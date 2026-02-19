@@ -45,6 +45,8 @@ def _table_columns(conn, table_name: str) -> set[str]:
 def _run_sqlite_migrations() -> None:
     with engine.begin() as conn:
         conn.execute(text("CREATE TABLE IF NOT EXISTS sessions (id INTEGER PRIMARY KEY, driver_id INTEGER NOT NULL, token TEXT NOT NULL UNIQUE, created_at DATETIME NOT NULL, last_seen_at DATETIME NOT NULL, FOREIGN KEY(driver_id) REFERENCES drivers(id))"))
+        conn.execute(text("CREATE TABLE IF NOT EXISTS revoked_tokens (id INTEGER PRIMARY KEY, token TEXT NOT NULL UNIQUE, revoked_at DATETIME NOT NULL)"))
+        conn.execute(text("CREATE TABLE IF NOT EXISTS certifications (id INTEGER PRIMARY KEY, driver_id INTEGER NOT NULL, cert_type TEXT NOT NULL, cert_ref TEXT NULL, issued_at DATETIME NOT NULL, FOREIGN KEY(driver_id) REFERENCES drivers(id))"))
 
         driver_columns = _table_columns(conn, "drivers")
         alterations = {
@@ -88,6 +90,8 @@ def _run_sqlite_migrations() -> None:
 
         conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_drivers_phone ON drivers(phone)"))
         conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_sessions_token ON sessions(token)"))
+        conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_revoked_tokens_token ON revoked_tokens(token)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_certifications_driver_id ON certifications(driver_id)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_trips_group_tag ON trips(group_tag)"))
 
         conn.execute(text("CREATE TABLE IF NOT EXISTS voice_messages (id INTEGER PRIMARY KEY, driver_id INTEGER NOT NULL, trip_id INTEGER NULL, file_path TEXT NOT NULL, duration_sec REAL NULL, target TEXT NULL, note TEXT NULL, status TEXT NOT NULL, created_at DATETIME NOT NULL, FOREIGN KEY(driver_id) REFERENCES drivers(id), FOREIGN KEY(trip_id) REFERENCES trips(id))"))
