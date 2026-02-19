@@ -45,6 +45,7 @@ def get_or_create_driver_by_phone(
     email: Optional[str] = None,
     name: Optional[str] = None,
     role: Optional[str] = "taxi",
+    group_tag: Optional[str] = None,
 ) -> models.Driver:
     driver = get_driver_by_phone(db, phone)
     if driver:
@@ -56,6 +57,8 @@ def get_or_create_driver_by_phone(
             driver.role = role
         if email:
             driver.email = email
+        if group_tag:
+            driver.group_tag = group_tag
         db.commit()
         db.refresh(driver)
         return driver
@@ -66,6 +69,8 @@ def get_or_create_driver_by_phone(
         name=name,
         role=role or "taxi",
         created_at=datetime.utcnow(),
+        group_tag=group_tag,
+        approved=False,
     )
     db.add(driver)
     db.commit()
@@ -227,6 +232,8 @@ def create_voice_message(
         note=note,
         status=status,
         created_at=datetime.utcnow(),
+        group_tag=group_tag,
+        approved=False,
     )
     db.add(msg)
     db.commit()

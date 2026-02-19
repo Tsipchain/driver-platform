@@ -30,6 +30,7 @@ class Driver(Base):
     notes = Column(Text, nullable=True)
     company_name = Column(String(128), nullable=True)
     group_tag = Column(String(64), nullable=True, index=True)
+    approved = Column(Boolean, nullable=False, default=False)
 
     trips = relationship("Trip", back_populates="driver", cascade="all, delete-orphan")
     telemetry_events = relationship("TelemetryEvent", back_populates="driver", cascade="all, delete-orphan")
@@ -64,6 +65,7 @@ class Trip(Base):
     notes = Column(Text, nullable=True)
     company_name = Column(String(128), nullable=True)
     group_tag = Column(String(64), nullable=True, index=True)
+    approved = Column(Boolean, nullable=False, default=False)
 
     driver = relationship("Driver", back_populates="trips")
     telemetry_events = relationship("TelemetryEvent", back_populates="trip", cascade="all, delete-orphan")
@@ -122,6 +124,7 @@ class VoiceMessage(Base):
     in_reply_to = Column(Integer, nullable=True)
     read_at = Column(DateTime, nullable=True)
     group_tag = Column(String(64), nullable=True, index=True)
+    approved = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     driver = relationship("Driver")

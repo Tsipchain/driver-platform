@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Thronos Driver</title>
-    <link id="faviconLink" rel="icon" type="image/png" href="https://thronoschain.org/thronos-coin.png?v=1">
+    <link id="favicon" rel="icon" href="https://thronoschain.org/thronos-coin.png">
     <link rel="apple-touch-icon" href="https://thronoschain.org/thronos-coin.png?v=1">
     <meta name="theme-color" content="#00ff88">
     <link rel="stylesheet" href="./style.css" />
@@ -60,10 +60,10 @@
           <div class="row"><label><input type="checkbox" id="brakeHard" /> Απότομο φρενάρισμα</label><label><input type="checkbox" id="accelHard" /> Απότομο γκάζι</label><label><input type="checkbox" id="cornerHard" /> Απότομη στροφή</label></div>
           <div class="field-group"><label for="weather">Καιρός</label><select id="weather"><option value="">—</option><option value="clear">Καθαρός</option><option value="rain">Βροχή</option><option value="snow">Χιόνι</option></select></div>
           <div class="field-group"><label for="telemetryNotes">Σχόλιο</label><textarea id="telemetryNotes" rows="2"></textarea></div>
-          <button class="primary full" id="btnSendTelemetry">Αποστολή telemetry</button>
+          <button class="primary full" id="btnSendTelemetry">Send event snapshot</button>
+          <div class="row"><button class="outline full" id="btnStartAutoGps">START AUTO GPS</button><button class="outline full" id="btnStopAutoGps">STOP</button></div>
+          <div class="small-text" id="autoGpsStatus">Auto GPS: OFF</div>
         </div>
-        <button class="primary full" id="btnSendCode">Αποστολή κωδικού</button>
-
         <div class="card">
           <div class="card-header"><div class="card-title">VOICE / CB</div></div>
           <div class="small-text" id="voiceStatus">Πάτα για εγγραφή έως 30s.</div>
@@ -91,6 +91,8 @@
         </div>
         <div class="card"><div id="operatorMap" style="height:280px;border-radius:8px;"></div></div>
         <div class="card"><div class="card-title" id="operatorTableTitle">Drivers</div><div id="operatorTable"></div></div>
+        <div class="card"><div class="card-title">Προς έγκριση</div><div id="operatorPendingList" class="small-text">-</div></div>
+        <div class="card"><div class="card-title">Inbox από οδηγούς</div><div id="operatorVoiceList" class="small-text">-</div></div>
       </div>
     </div>
 

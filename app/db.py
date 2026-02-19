@@ -71,6 +71,7 @@ def _run_sqlite_migrations() -> None:
             "notes": "ALTER TABLE drivers ADD COLUMN notes TEXT",
             "company_name": "ALTER TABLE drivers ADD COLUMN company_name TEXT",
             "group_tag": "ALTER TABLE drivers ADD COLUMN group_tag TEXT",
+            "approved": "ALTER TABLE drivers ADD COLUMN approved INTEGER NOT NULL DEFAULT 0",
         }
         for col, ddl in alterations.items():
             if col not in driver_columns:
