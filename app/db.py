@@ -72,12 +72,23 @@ def _run_sqlite_migrations() -> None:
             if col not in driver_columns:
                 conn.execute(text(ddl))
 
+
+        trip_columns = _table_columns(conn, "trips")
+        trip_alterations = {
+            "company_name": "ALTER TABLE trips ADD COLUMN company_name TEXT",
+            "group_tag": "ALTER TABLE trips ADD COLUMN group_tag TEXT",
+        }
+        for col, ddl in trip_alterations.items():
+            if col not in trip_columns:
+                conn.execute(text(ddl))
+
         conn.execute(text("UPDATE drivers SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"))
         conn.execute(text("UPDATE drivers SET role = 'taxi' WHERE role IS NULL OR role = ''"))
         conn.execute(text("UPDATE drivers SET phone = '+30' || printf('%09d', id) WHERE phone IS NULL OR phone = ''"))
 
         conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_drivers_phone ON drivers(phone)"))
         conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_sessions_token ON sessions(token)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_trips_group_tag ON trips(group_tag)"))
 
         conn.execute(text("CREATE TABLE IF NOT EXISTS voice_messages (id INTEGER PRIMARY KEY, driver_id INTEGER NOT NULL, trip_id INTEGER NULL, file_path TEXT NOT NULL, duration_sec REAL NULL, target TEXT NULL, note TEXT NULL, status TEXT NOT NULL, created_at DATETIME NOT NULL, FOREIGN KEY(driver_id) REFERENCES drivers(id), FOREIGN KEY(trip_id) REFERENCES trips(id))"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_voice_messages_driver_id ON voice_messages(driver_id)"))
