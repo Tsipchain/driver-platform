@@ -1,8 +1,18 @@
 const API_BASE = window.location.origin;
 
-
 let requestCodeCooldownTimer = null;
 let requestCodeCooldownLeft = 0;
+let mediaRecorder = null;
+let mediaChunks = [];
+let mediaStopTimeout = null;
+let operatorMap = null;
+let operatorMarkers = [];
+
+function $(id) { return document.getElementById(id); }
+function isOperatorMode() { return window.location.pathname.startsWith('/operator') || window.location.pathname.startsWith('/school'); }
+function isSchoolMode() { return window.location.pathname.startsWith('/school'); }
+
+function toast(msg) { alert(msg); }
 
 function updateRequestCodeButton() {
   const btn = $("btnSendCode");
@@ -17,41 +27,25 @@ function updateRequestCodeButton() {
 }
 
 function startRequestCodeCooldown(seconds) {
-  if (requestCodeCooldownTimer) {
-    clearInterval(requestCodeCooldownTimer);
-    requestCodeCooldownTimer = null;
-  }
-
+  if (requestCodeCooldownTimer) clearInterval(requestCodeCooldownTimer);
   requestCodeCooldownLeft = Math.max(0, Number(seconds) || 0);
   updateRequestCodeButton();
-
-  if (requestCodeCooldownLeft <= 0) {
-    return;
-  }
-
+  if (requestCodeCooldownLeft <= 0) return;
   requestCodeCooldownTimer = setInterval(() => {
     requestCodeCooldownLeft = Math.max(0, requestCodeCooldownLeft - 1);
     updateRequestCodeButton();
-    if (requestCodeCooldownLeft === 0 && requestCodeCooldownTimer) {
+    if (requestCodeCooldownLeft === 0) {
       clearInterval(requestCodeCooldownTimer);
       requestCodeCooldownTimer = null;
     }
   }, 1000);
 }
 
-function $(id) {
-  return document.getElementById(id);
-}
-
-function getToken() {
-  return localStorage.getItem("driverSessionToken");
-}
-
+function getToken() { return localStorage.getItem("driverSessionToken"); }
 function setSession(data) {
   localStorage.setItem("driverSessionToken", data.session_token);
   localStorage.setItem("driverProfile", JSON.stringify(data.driver));
 }
-
 function clearSession() {
   localStorage.removeItem("driverSessionToken");
   localStorage.removeItem("driverProfile");
@@ -60,14 +54,15 @@ function clearSession() {
 
 async function apiFetch(path, options = {}) {
   const { skipUnauthorizedRedirect = false, ...fetchOptions } = options;
-  const headers = { "Content-Type": "application/json", ...(fetchOptions.headers || {}) };
-  const token = getToken();
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
+  const headers = { ...(fetchOptions.headers || {}) };
+  if (!(fetchOptions.body instanceof FormData)) {
+    headers["Content-Type"] = headers["Content-Type"] || "application/json";
   }
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
 
   const resp = await fetch(`${API_BASE}${path}`, { ...fetchOptions, headers });
-  if (resp.status === 401 && !skipUnauthorizedRedirect) {
+  if (resp.status === 401 && !skipUnauthorizedRedirect && !isOperatorMode()) {
     clearSession();
     renderAuthState();
     throw new Error("Unauthorized");
@@ -76,14 +71,22 @@ async function apiFetch(path, options = {}) {
 }
 
 function renderAuthState() {
+  if (isOperatorMode()) {
+    $("loginScreen").style.display = "none";
+    $("dashboardScreen").style.display = "none";
+    $("profileScreen").style.display = "none";
+    $("operatorScreen").style.display = "block";
+    $("operatorTitle").textContent = isSchoolMode() ? "Driving School Dashboard" : "Operator Dashboard";
+    $("operatorTableTitle").textContent = isSchoolMode() ? "Μαθήματα / Instructors" : "Drivers";
+    return;
+  }
+
   const hasToken = !!getToken();
   $("loginScreen").style.display = hasToken ? "none" : "block";
   $("dashboardScreen").style.display = hasToken ? "block" : "none";
   $("profileScreen").style.display = "none";
-
-  if (hasToken) {
-    updateHeaderProfile();
-  }
+  $("operatorScreen").style.display = "none";
+  if (hasToken) updateHeaderProfile();
 }
 
 function updateHeaderProfile() {
@@ -99,25 +102,14 @@ async function requestCode() {
     role: "taxi",
   };
 
-  const resp = await apiFetch("/api/auth/request-code", {
-    method: "POST",
-    body: JSON.stringify(payload),
-    skipUnauthorizedRedirect: true,
-  });
-
+  const resp = await apiFetch("/api/auth/request-code", { method: "POST", body: JSON.stringify(payload), skipUnauthorizedRedirect: true });
   if (resp.status === 429) {
-    let retryAfter = 120;
-    try {
-      const data = await resp.json();
-      retryAfter = Number(data.retry_after || data?.detail?.retry_after || 120);
-    } catch (err) {
-      console.warn("cooldown parse error", err);
-    }
+    const data = await resp.json();
+    const retryAfter = Number(data.retry_after || 120);
     startRequestCodeCooldown(retryAfter);
     $("authMessage").textContent = `Περίμενε ${retryAfter}s πριν ζητήσεις νέο κωδικό.`;
     return;
   }
-
   if (!resp.ok) {
     $("authMessage").textContent = "Αποτυχία αποστολής κωδικού.";
     return;
@@ -130,37 +122,21 @@ async function requestCode() {
 }
 
 async function verifyCode() {
-  const payload = {
-    phone: $("loginPhone").value.trim(),
-    code: $("loginCode").value.trim(),
-  };
-
-  const resp = await apiFetch("/api/auth/verify-code", {
-    method: "POST",
-    body: JSON.stringify(payload),
-    skipUnauthorizedRedirect: true,
-  });
+  const payload = { phone: $("loginPhone").value.trim(), code: $("loginCode").value.trim() };
+  const resp = await apiFetch("/api/auth/verify-code", { method: "POST", body: JSON.stringify(payload), skipUnauthorizedRedirect: true });
   if (!resp.ok) {
     $("authMessage").textContent = "Λάθος ή ληγμένος κωδικός.";
     return;
   }
-
   const data = await resp.json();
   setSession(data);
   renderAuthState();
 }
 
 async function startTrip() {
-  const payload = {
-    origin: $("tripOrigin").value.trim() || null,
-    destination: $("tripDestination").value.trim() || null,
-    notes: null,
-  };
+  const payload = { origin: $("tripOrigin").value.trim() || null, destination: $("tripDestination").value.trim() || null, notes: null };
   const resp = await apiFetch("/api/v1/trips/start", { method: "POST", body: JSON.stringify(payload) });
-  if (!resp.ok) {
-    alert("Σφάλμα εκκίνησης δρομολογίου.");
-    return;
-  }
+  if (!resp.ok) return toast("Σφάλμα εκκίνησης δρομολογίου.");
   const data = await resp.json();
   localStorage.setItem("current_trip_id", String(data.id));
   $("tripStatus").textContent = `Trip #${data.id} ενεργό`;
@@ -168,23 +144,10 @@ async function startTrip() {
 
 async function finishTrip() {
   const tripId = localStorage.getItem("current_trip_id");
-  if (!tripId) {
-    alert("Δεν υπάρχει ενεργό δρομολόγιο.");
-    return;
-  }
-
-  const payload = {
-    notes: $("tripNotes").value.trim() || null,
-    distance_km: null,
-    avg_speed_kmh: null,
-    safety_score: null,
-  };
+  if (!tripId) return toast("Δεν υπάρχει ενεργό δρομολόγιο.");
+  const payload = { notes: $("tripNotes").value.trim() || null, distance_km: null, avg_speed_kmh: null, safety_score: null };
   const resp = await apiFetch(`/api/v1/trips/${tripId}/finish`, { method: "POST", body: JSON.stringify(payload) });
-  if (!resp.ok) {
-    alert("Σφάλμα ολοκλήρωσης δρομολογίου.");
-    return;
-  }
-
+  if (!resp.ok) return toast("Σφάλμα ολοκλήρωσης δρομολογίου.");
   const data = await resp.json();
   $("tripStatus").textContent = `Trip #${data.id} ολοκληρώθηκε`;
   localStorage.removeItem("current_trip_id");
@@ -205,24 +168,71 @@ async function sendTelemetry() {
     weather: $("weather").value || null,
     raw_notes: $("telemetryNotes").value.trim() || null,
   };
-
   const resp = await apiFetch("/api/v1/telemetry", { method: "POST", body: JSON.stringify(payload) });
-  if (!resp.ok) {
-    alert("Σφάλμα αποστολής telemetry.");
-    return;
+  if (!resp.ok) return toast("Σφάλμα αποστολής telemetry.");
+  $("telemetryNotes").value = "";
+}
+
+async function startVoiceRecording() {
+  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+    return toast("Η συσκευή δεν υποστηρίζει εγγραφή ήχου.");
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaChunks = [];
+    mediaRecorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+    mediaRecorder.ondataavailable = (e) => { if (e.data?.size) mediaChunks.push(e.data); };
+    mediaRecorder.onstop = async () => {
+      stream.getTracks().forEach((t) => t.stop());
+      if (mediaStopTimeout) clearTimeout(mediaStopTimeout);
+      await uploadVoice();
+    };
+    mediaRecorder.start();
+    $("voiceStatus").textContent = "Γίνεται εγγραφή... (max 30s)";
+    $("btnVoiceRecord").disabled = true;
+    $("btnVoiceStop").disabled = false;
+    mediaStopTimeout = setTimeout(() => { if (mediaRecorder?.state === "recording") mediaRecorder.stop(); }, 30000);
+  } catch (err) {
+    console.error(err);
+    toast("Αδυναμία πρόσβασης στο μικρόφωνο.");
   }
   $("telemetryNotes").value = "";
+}
+
+async function stopVoiceRecording() {
+  if (mediaRecorder && mediaRecorder.state === "recording") mediaRecorder.stop();
+  $("btnVoiceStop").disabled = true;
+}
+
+async function uploadVoice() {
+  try {
+    const blob = new Blob(mediaChunks, { type: "audio/webm" });
+    const form = new FormData();
+    form.append("file", blob, `voice-${Date.now()}.webm`);
+    const tripId = localStorage.getItem("current_trip_id");
+    if (tripId) form.append("trip_id", tripId);
+    form.append("target", "cb");
+    const resp = await apiFetch("/api/v1/voice-messages", { method: "POST", body: form });
+    if (!resp.ok) throw new Error("upload failed");
+    $("voiceStatus").textContent = "Το φωνητικό μήνυμα στάλθηκε.";
+    toast("Voice sent");
+  } catch (err) {
+    console.error(err);
+    $("voiceStatus").textContent = "Αποτυχία αποστολής voice.";
+    toast("Voice upload error");
+  } finally {
+    $("btnVoiceRecord").disabled = false;
+    $("btnVoiceStop").disabled = true;
+  }
 }
 
 async function openProfile() {
   $("dashboardScreen").style.display = "none";
   $("profileScreen").style.display = "block";
-
   const driver = JSON.parse(localStorage.getItem("driverProfile") || "{}");
   $("profilePhone").value = driver.phone || "";
   $("profileName").value = driver.name || "";
   $("profileRole").value = driver.role || "taxi";
-
   const walletResp = await apiFetch("/api/wallet");
   if (walletResp.ok) {
     const wallet = await walletResp.json();
@@ -232,43 +242,75 @@ async function openProfile() {
 }
 
 async function saveWallet() {
-  const payload = {
-    wallet_address: $("walletAddress").value.trim(),
-    company_token_symbol: $("tokenSymbol").value.trim() || null,
-  };
+  const payload = { wallet_address: $("walletAddress").value.trim(), company_token_symbol: $("tokenSymbol").value.trim() || null };
   const resp = await apiFetch("/api/wallet/link", { method: "POST", body: JSON.stringify(payload) });
-  if (!resp.ok) {
-    $("walletMessage").textContent = "Αποτυχία αποθήκευσης wallet.";
-    return;
-  }
-
+  if (!resp.ok) return ($("walletMessage").textContent = "Αποτυχία αποθήκευσης wallet.");
   const profile = JSON.parse(localStorage.getItem("driverProfile") || "{}");
   profile.name = $("profileName").value.trim() || null;
   localStorage.setItem("driverProfile", JSON.stringify(profile));
-
-  await apiFetch("/api/me", {
-    method: "POST",
-    body: JSON.stringify({ name: profile.name }),
-  });
-
+  await apiFetch("/api/me", { method: "POST", body: JSON.stringify({ name: profile.name }) });
   $("walletMessage").textContent = "Το wallet αποθηκεύτηκε.";
   updateHeaderProfile();
+}
+
+function initOperatorMap() {
+  if (!window.L || !$("operatorMap") || operatorMap) return;
+  operatorMap = L.map("operatorMap").setView([40.64, 22.94], 11);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "&copy; OpenStreetMap" }).addTo(operatorMap);
+}
+
+function renderOperatorData(data) {
+  initOperatorMap();
+  if (operatorMap) {
+    operatorMarkers.forEach((m) => operatorMap.removeLayer(m));
+    operatorMarkers = [];
+  }
+
+  const rows = (data.drivers || []).map((d) => {
+    const t = d.last_telemetry || {};
+    if (operatorMap && t.lat && t.lng) {
+      const marker = L.marker([t.lat, t.lng]).addTo(operatorMap).bindPopup(`${d.name || d.phone} (${d.last_trip_status})`);
+      operatorMarkers.push(marker);
+    }
+    return `<tr><td>${d.name || d.phone || '-'}</td><td>${d.last_trip_status || '-'}</td><td>${t.speed ?? '-'}</td><td>${t.timestamp || '-'}</td></tr>`;
+  }).join("");
+
+  $("operatorMeta").textContent = `${isSchoolMode() ? 'Active lessons' : 'Active drivers'}: ${data.active_drivers || 0}`;
+  $("operatorTable").innerHTML = `<table style="width:100%;font-size:12px;"><thead><tr><th>Name</th><th>Status</th><th>Speed</th><th>Last ts</th></tr></thead><tbody>${rows || '<tr><td colspan="4">No data</td></tr>'}</tbody></table>`;
+}
+
+async function loadOperatorDashboard() {
+  const token = $("operatorAdminToken").value.trim();
+  const groupTag = $("operatorGroupTag").value.trim();
+  const qs = new URLSearchParams();
+  if (groupTag) qs.set("group_tag", groupTag);
+  const resp = await fetch(`${API_BASE}/api/operator/dashboard?${qs.toString()}`, { headers: { "X-Admin-Token": token } });
+  if (!resp.ok) return toast("Operator auth/data error");
+  const data = await resp.json();
+  renderOperatorData(data);
 }
 
 window.addEventListener("DOMContentLoaded", () => {
   renderAuthState();
   updateRequestCodeButton();
-  $("btnSendCode").addEventListener("click", requestCode);
-  $("btnVerifyCode").addEventListener("click", verifyCode);
 
-  $("btnStartTrip").addEventListener("click", startTrip);
-  $("btnFinishTrip").addEventListener("click", finishTrip);
-  $("btnSendTelemetry").addEventListener("click", sendTelemetry);
+  if (isOperatorMode()) {
+    $("btnLoadOperator")?.addEventListener("click", loadOperatorDashboard);
+    initOperatorMap();
+    return;
+  }
 
-  $("btnOpenProfile").addEventListener("click", openProfile);
-  $("btnCloseProfile").addEventListener("click", () => {
+  $("btnSendCode")?.addEventListener("click", requestCode);
+  $("btnVerifyCode")?.addEventListener("click", verifyCode);
+  $("btnStartTrip")?.addEventListener("click", startTrip);
+  $("btnFinishTrip")?.addEventListener("click", finishTrip);
+  $("btnSendTelemetry")?.addEventListener("click", sendTelemetry);
+  $("btnVoiceRecord")?.addEventListener("click", startVoiceRecording);
+  $("btnVoiceStop")?.addEventListener("click", stopVoiceRecording);
+  $("btnOpenProfile")?.addEventListener("click", openProfile);
+  $("btnCloseProfile")?.addEventListener("click", () => {
     $("profileScreen").style.display = "none";
     $("dashboardScreen").style.display = "block";
   });
-  $("btnSaveWallet").addEventListener("click", saveWallet);
+  $("btnSaveWallet")?.addEventListener("click", saveWallet);
 });

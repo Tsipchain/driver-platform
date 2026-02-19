@@ -65,6 +65,8 @@ def _run_sqlite_migrations() -> None:
             "taxi_company": "ALTER TABLE drivers ADD COLUMN taxi_company TEXT",
             "plate_number": "ALTER TABLE drivers ADD COLUMN plate_number TEXT",
             "notes": "ALTER TABLE drivers ADD COLUMN notes TEXT",
+            "company_name": "ALTER TABLE drivers ADD COLUMN company_name TEXT",
+            "group_tag": "ALTER TABLE drivers ADD COLUMN group_tag TEXT",
         }
         for col, ddl in alterations.items():
             if col not in driver_columns:
@@ -76,6 +78,10 @@ def _run_sqlite_migrations() -> None:
 
         conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_drivers_phone ON drivers(phone)"))
         conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_sessions_token ON sessions(token)"))
+
+        conn.execute(text("CREATE TABLE IF NOT EXISTS voice_messages (id INTEGER PRIMARY KEY, driver_id INTEGER NOT NULL, trip_id INTEGER NULL, file_path TEXT NOT NULL, duration_sec REAL NULL, target TEXT NULL, note TEXT NULL, status TEXT NOT NULL, created_at DATETIME NOT NULL, FOREIGN KEY(driver_id) REFERENCES drivers(id), FOREIGN KEY(trip_id) REFERENCES trips(id))"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_voice_messages_driver_id ON voice_messages(driver_id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_voice_messages_created_at ON voice_messages(created_at)"))
 
 
 def init_db() -> None:

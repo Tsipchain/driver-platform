@@ -28,6 +28,8 @@ class Driver(Base):
     taxi_company = Column(String(128), nullable=True)
     plate_number = Column(String(32), nullable=True)
     notes = Column(Text, nullable=True)
+    company_name = Column(String(128), nullable=True)
+    group_tag = Column(String(64), nullable=True, index=True)
 
     trips = relationship("Trip", back_populates="driver", cascade="all, delete-orphan")
     telemetry_events = relationship("TelemetryEvent", back_populates="driver", cascade="all, delete-orphan")
@@ -60,6 +62,8 @@ class Trip(Base):
     avg_speed_kmh = Column(Float, nullable=True)
     safety_score = Column(Float, nullable=True)
     notes = Column(Text, nullable=True)
+    company_name = Column(String(128), nullable=True)
+    group_tag = Column(String(64), nullable=True, index=True)
 
     driver = relationship("Driver", back_populates="trips")
     telemetry_events = relationship("TelemetryEvent", back_populates="trip", cascade="all, delete-orphan")
@@ -100,4 +104,21 @@ class VoiceEvent(Base):
     intent_hint = Column(String(64), nullable=True)
 
     driver = relationship("Driver", back_populates="voice_events")
+    trip = relationship("Trip")
+
+
+class VoiceMessage(Base):
+    __tablename__ = "voice_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    driver_id = Column(Integer, ForeignKey("drivers.id"), nullable=False, index=True)
+    trip_id = Column(Integer, ForeignKey("trips.id"), nullable=True, index=True)
+    file_path = Column(String(512), nullable=False)
+    duration_sec = Column(Float, nullable=True)
+    target = Column(String(64), nullable=True)
+    note = Column(Text, nullable=True)
+    status = Column(String(32), nullable=False, default="received")
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    driver = relationship("Driver")
     trip = relationship("Trip")

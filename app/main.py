@@ -3,14 +3,15 @@ import os
 import re
 import secrets
 import smtplib
+from pathlib import Path
 from datetime import datetime, timedelta
 from email.message import EmailMessage
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.orm import Session
 
 from . import crud, models, schemas
@@ -177,6 +178,67 @@ def get_current_driver_optional(
     return driver
 
 
+def _get_admin_token() -> str:
+    return (os.getenv("X_ADMIN_TOKEN") or os.getenv("DRIVER_ADMIN_TOKEN") or "").strip()
+
+
+def require_admin_token(x_admin_token: Optional[str] = Header(default=None)) -> None:
+    configured = _get_admin_token()
+    if not configured or x_admin_token != configured:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+def _voice_storage_base() -> Path:
+    return Path("/app/data/voice")
+
+
+def _parse_multipart_voice_payload(raw_body: bytes, content_type: str) -> tuple[bytes, str, Optional[int], Optional[str], Optional[str]]:
+    boundary_marker = "boundary="
+    if boundary_marker not in content_type:
+        raise HTTPException(status_code=400, detail="Invalid multipart payload")
+
+    boundary = content_type.split(boundary_marker, 1)[1].strip()
+    if boundary.startswith('"') and boundary.endswith('"'):
+        boundary = boundary[1:-1]
+
+    delimiter = ("--" + boundary).encode()
+    file_bytes = b""
+    filename = "voice.webm"
+    trip_id: Optional[int] = None
+    note: Optional[str] = None
+    target: Optional[str] = "cb"
+
+    for part in raw_body.split(delimiter):
+        part = part.strip()
+        if not part or part in {b"--", b"--\r\n"}:
+            continue
+        if b"\r\n\r\n" not in part:
+            continue
+        headers_raw, data = part.split(b"\r\n\r\n", 1)
+        headers_text = headers_raw.decode("utf-8", errors="ignore")
+        value = data.rstrip(b"\r\n")
+
+        if 'name="file"' in headers_text:
+            file_bytes = value
+            if 'filename="' in headers_text:
+                filename = headers_text.split('filename="', 1)[1].split('"', 1)[0] or filename
+        elif 'name="trip_id"' in headers_text:
+            txt = value.decode("utf-8", errors="ignore").strip()
+            if txt:
+                trip_id = int(txt)
+        elif 'name="note"' in headers_text:
+            note = value.decode("utf-8", errors="ignore").strip() or None
+        elif 'name="target"' in headers_text:
+            target = value.decode("utf-8", errors="ignore").strip() or "cb"
+
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Missing file part")
+
+    return file_bytes, filename, trip_id, note, target
+
+
+
+
 init_db()
 
 app = FastAPI(title="Thronos Driver Service", version="0.1.0")
@@ -211,7 +273,7 @@ def request_code(req: schemas.AuthRequestCode, db: Session = Depends(get_db)):
         elapsed = (now - driver.last_code_sent_at).total_seconds()
         if elapsed < cooldown_seconds:
             retry_after = max(1, int(cooldown_seconds - elapsed))
-            return JSONResponse(status_code=429, content={"error": "cooldown", "retry_after": retry_after})
+            return JSONResponse(status_code=429, content={"error": "CODE_TOO_SOON", "retry_after": retry_after})
 
     code = generate_otp_code()
     driver.verification_code = code
@@ -346,6 +408,91 @@ def wallet_get(
     }
 
 
+@app.post("/api/v1/voice-messages", response_model=schemas.VoiceMessageRead)
+async def api_create_voice_message(
+    request: Request,
+    current_driver: Driver = Depends(get_current_driver),
+    db: Session = Depends(get_db),
+):
+    content_type = request.headers.get("content-type", "")
+    if "multipart/form-data" not in content_type:
+        raise HTTPException(status_code=400, detail="Expected multipart/form-data")
+
+    raw_body = await request.body()
+    file_bytes, incoming_filename, trip_id, note, target = _parse_multipart_voice_payload(raw_body, content_type)
+
+    now = datetime.utcnow()
+    ts = now.strftime("%Y%m%d%H%M%S%f")
+    suffix = Path(incoming_filename).suffix or ".webm"
+    driver_dir = _voice_storage_base() / str(current_driver.id)
+    driver_dir.mkdir(parents=True, exist_ok=True)
+    absolute_path = driver_dir / f"{ts}{suffix}"
+    absolute_path.write_bytes(file_bytes)
+
+    msg = crud.create_voice_message(
+        db,
+        driver_id=current_driver.id,
+        trip_id=trip_id,
+        file_path=str(absolute_path),
+        duration_sec=None,
+        target=target,
+        note=note,
+        status="received",
+    )
+    return msg
+
+
+@app.get("/api/v1/voice-messages/recent")
+def api_recent_voice_messages(
+    limit: int = Query(default=20, ge=1, le=200),
+    _: None = Depends(require_admin_token),
+    db: Session = Depends(get_db),
+):
+    rows = crud.list_recent_voice_messages(db, limit=limit)
+    out = []
+    for row in rows:
+        drv = crud.get_driver(db, row.driver_id)
+        out.append(
+            {
+                "id": row.id,
+                "driver": {
+                    "id": drv.id if drv else None,
+                    "name": drv.name if drv else None,
+                    "phone": drv.phone if drv else None,
+                    "group_tag": drv.group_tag if drv else None,
+                },
+                "trip_id": row.trip_id,
+                "file_path": row.file_path,
+                "duration_sec": row.duration_sec,
+                "target": row.target,
+                "status": row.status,
+                "created_at": row.created_at,
+            }
+        )
+    return {"items": out}
+
+
+@app.get("/api/operator/dashboard")
+def api_operator_dashboard(
+    group_tag: Optional[str] = None,
+    _: None = Depends(require_admin_token),
+    db: Session = Depends(get_db),
+):
+    return crud.get_operator_dashboard(db, group_tag=group_tag)
+
+
+@app.get("/api/operator/events/recent")
+def api_operator_recent_events(
+    group_tag: Optional[str] = None,
+    limit: int = Query(default=50, ge=1, le=500),
+    _: None = Depends(require_admin_token),
+    db: Session = Depends(get_db),
+):
+    return {"events": crud.get_recent_operator_events(db, group_tag=group_tag, limit=limit)}
+
+
+
+
 app.include_router(auth_router)
 
 
@@ -457,6 +604,18 @@ def api_driver_score(driver_id: int, db: Session = Depends(get_db)):
         avg_speed_kmh=avg_speed,
         score_0_100=score,
     )
+
+
+@app.get("/operator")
+def operator_page():
+    index_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "index.html")
+    return FileResponse(index_file)
+
+
+@app.get("/school")
+def school_page():
+    index_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "index.html")
+    return FileResponse(index_file)
 
 
 frontend_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend")

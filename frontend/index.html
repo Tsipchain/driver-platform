@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Thronos Driver</title>
     <link rel="stylesheet" href="./style.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   </head>
   <body>
     <div class="app-shell">
@@ -17,26 +18,16 @@
           <span class="badge">AUTH</span>
         </div>
 
-        <div class="field-group">
-          <label for="loginPhone">Κινητό τηλέφωνο</label>
-          <input id="loginPhone" placeholder="π.χ. 69XXXXXXXX" />
-        </div>
-        <div class="field-group">
-          <label for="loginEmail">Email (προαιρετικό)</label>
-          <input id="loginEmail" placeholder="name@example.com" />
-        </div>
-        <div class="field-group">
-          <label for="loginName">Όνομα (προαιρετικό)</label>
-          <input id="loginName" placeholder="π.χ. Γιώργος" />
-        </div>
+        <div class="field-group"><label for="loginPhone">Κινητό τηλέφωνο</label><input id="loginPhone" placeholder="π.χ. 69XXXXXXXX" /></div>
+        <div class="field-group"><label for="loginEmail">Email (προαιρετικό)</label><input id="loginEmail" placeholder="name@example.com" /></div>
+        <div class="field-group"><label for="loginName">Όνομα (προαιρετικό)</label><input id="loginName" placeholder="π.χ. Γιώργος" /></div>
         <button class="primary full" id="btnSendCode">Αποστολή κωδικού</button>
 
-        <div class="field-group" id="codeWrap" style="display: none; margin-top: 10px">
+        <div class="field-group" id="codeWrap" style="display:none; margin-top:10px;">
           <label for="loginCode">Κωδικός 6 ψηφίων</label>
           <input id="loginCode" maxlength="6" placeholder="123456" />
           <button class="primary full" id="btnVerifyCode">Επιβεβαίωση</button>
         </div>
-
         <div class="small-text" id="authMessage"></div>
       </div>
 
@@ -52,45 +43,33 @@
         </div>
 
         <div class="card">
-          <div class="card-header">
-            <div class="card-title">Δρομολόγιο</div>
-            <div class="status-pill" id="tripStatus"><strong>Off</strong> — δεν υπάρχει ενεργό</div>
-          </div>
+          <div class="card-header"><div class="card-title">Δρομολόγιο</div><div class="status-pill" id="tripStatus"><strong>Off</strong> — δεν υπάρχει ενεργό</div></div>
           <div class="field-group"><label for="tripOrigin">Αφετηρία</label><input id="tripOrigin" /></div>
           <div class="field-group"><label for="tripDestination">Προορισμός</label><input id="tripDestination" /></div>
           <div class="field-group"><label for="tripNotes">Σημειώσεις</label><textarea id="tripNotes" rows="2"></textarea></div>
-          <div class="row">
-            <button class="primary full" id="btnStartTrip"><span class="dot"></span> Start</button>
-            <button class="outline full" id="btnFinishTrip">Finish</button>
-          </div>
+          <div class="row"><button class="primary full" id="btnStartTrip"><span class="dot"></span> Start</button><button class="outline full" id="btnFinishTrip">Finish</button></div>
         </div>
 
         <div class="card">
           <div class="card-header"><div class="card-title">Telemetry (χειροκίνητο)</div></div>
-          <div class="row">
-            <div class="field-group"><label for="gpsLat">GPS Lat</label><input id="gpsLat" /></div>
-            <div class="field-group"><label for="gpsLng">GPS Lng</label><input id="gpsLng" /></div>
-          </div>
+          <div class="row"><div class="field-group"><label for="gpsLat">GPS Lat</label><input id="gpsLat" /></div><div class="field-group"><label for="gpsLng">GPS Lng</label><input id="gpsLng" /></div></div>
           <div class="field-group"><label for="speed">Ταχύτητα (km/h)</label><input id="speed" /></div>
-          <div class="row">
-            <label><input type="checkbox" id="brakeHard" /> Απότομο φρενάρισμα</label>
-            <label><input type="checkbox" id="accelHard" /> Απότομο γκάζι</label>
-            <label><input type="checkbox" id="cornerHard" /> Απότομη στροφή</label>
-          </div>
-          <div class="field-group">
-            <label for="weather">Καιρός</label>
-            <select id="weather"><option value="">—</option><option value="clear">Καθαρός</option><option value="rain">Βροχή</option><option value="snow">Χιόνι</option></select>
-          </div>
+          <div class="row"><label><input type="checkbox" id="brakeHard" /> Απότομο φρενάρισμα</label><label><input type="checkbox" id="accelHard" /> Απότομο γκάζι</label><label><input type="checkbox" id="cornerHard" /> Απότομη στροφή</label></div>
+          <div class="field-group"><label for="weather">Καιρός</label><select id="weather"><option value="">—</option><option value="clear">Καθαρός</option><option value="rain">Βροχή</option><option value="snow">Χιόνι</option></select></div>
           <div class="field-group"><label for="telemetryNotes">Σχόλιο</label><textarea id="telemetryNotes" rows="2"></textarea></div>
           <button class="primary full" id="btnSendTelemetry">Αποστολή telemetry</button>
+        </div>
+        <button class="primary full" id="btnSendCode">Αποστολή κωδικού</button>
+
+        <div class="card">
+          <div class="card-header"><div class="card-title">VOICE / CB</div></div>
+          <div class="small-text" id="voiceStatus">Πάτα για εγγραφή έως 30s.</div>
+          <div class="row" style="margin-top:8px;"><button class="primary full" id="btnVoiceRecord">Start Voice</button><button class="outline full" id="btnVoiceStop" disabled>Stop & Send</button></div>
         </div>
       </div>
 
       <div id="profileScreen" class="card" style="display:none;">
-        <div class="card-header">
-          <div class="card-title">Profile & Wallet</div>
-          <button class="outline" id="btnCloseProfile">Πίσω</button>
-        </div>
+        <div class="card-header"><div class="card-title">Profile & Wallet</div><button class="outline" id="btnCloseProfile">Πίσω</button></div>
         <div class="field-group"><label>Τηλέφωνο</label><input id="profilePhone" readonly /></div>
         <div class="field-group"><label for="profileName">Όνομα</label><input id="profileName" /></div>
         <div class="field-group"><label>Role</label><input id="profileRole" readonly /></div>
@@ -99,8 +78,20 @@
         <button class="primary full" id="btnSaveWallet">Αποθήκευση Wallet</button>
         <div class="small-text" id="walletMessage"></div>
       </div>
+
+      <div id="operatorScreen" style="display:none;">
+        <div class="card">
+          <div class="card-header"><div class="card-title" id="operatorTitle">Operator Dashboard</div></div>
+          <div class="row"><div class="field-group"><label for="operatorGroupTag">group_tag</label><input id="operatorGroupTag" placeholder="pilot-a" /></div><div class="field-group"><label for="operatorAdminToken">X-Admin-Token</label><input id="operatorAdminToken" /></div></div>
+          <button class="primary full" id="btnLoadOperator">Load dashboard</button>
+          <div class="small-text" id="operatorMeta"></div>
+        </div>
+        <div class="card"><div id="operatorMap" style="height:280px;border-radius:8px;"></div></div>
+        <div class="card"><div class="card-title" id="operatorTableTitle">Drivers</div><div id="operatorTable"></div></div>
+      </div>
     </div>
 
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="./app.js"></script>
   </body>
 </html>

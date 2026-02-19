@@ -12,6 +12,8 @@ class DriverBase(BaseModel):
     taxi_company: Optional[str] = None
     plate_number: Optional[str] = None
     notes: Optional[str] = None
+    company_name: Optional[str] = None
+    group_tag: Optional[str] = None
 
 
 class DriverCreate(DriverBase):
@@ -32,6 +34,8 @@ class TripBase(BaseModel):
     origin: Optional[str] = None
     destination: Optional[str] = None
     notes: Optional[str] = None
+    company_name: Optional[str] = None
+    group_tag: Optional[str] = None
 
 
 class TripStartRequest(TripBase):
@@ -43,6 +47,8 @@ class TripFinishRequest(BaseModel):
     avg_speed_kmh: Optional[float] = None
     safety_score: Optional[float] = None
     notes: Optional[str] = None
+    company_name: Optional[str] = None
+    group_tag: Optional[str] = None
 
 
 class TripRead(TripBase):
@@ -128,3 +134,18 @@ class WalletLinkRequest(BaseModel):
 
 class MeUpdateRequest(BaseModel):
     name: Optional[str] = None
+
+
+class VoiceMessageRead(BaseModel):
+    id: int
+    driver_id: int
+    trip_id: Optional[int] = None
+    file_path: str
+    duration_sec: Optional[float] = None
+    target: Optional[str] = None
+    note: Optional[str] = None
+    status: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True

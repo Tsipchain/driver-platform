@@ -18,6 +18,8 @@ def create_driver(db: Session, driver: schemas.DriverCreate) -> models.Driver:
         taxi_company=driver.taxi_company,
         plate_number=driver.plate_number,
         notes=driver.notes,
+        company_name=driver.company_name,
+        group_tag=driver.group_tag,
     )
     db.add(obj)
     db.commit()
@@ -52,6 +54,8 @@ def get_or_create_driver_by_phone(
             driver.name = name
         if role:
             driver.role = role
+        if email:
+            driver.email = email
         db.commit()
         db.refresh(driver)
         return driver
@@ -202,3 +206,139 @@ def compute_driver_score(db: Session, driver_id: int) -> Tuple[int, int, int, fl
 
     score = max(0.0, min(score, 100.0))
     return total_trips, total_events, harsh_events, harsh_ratio, avg_speed, score
+
+
+def create_voice_message(
+    db: Session,
+    driver_id: int,
+    file_path: str,
+    trip_id: Optional[int] = None,
+    duration_sec: Optional[float] = None,
+    target: Optional[str] = None,
+    note: Optional[str] = None,
+    status: str = "received",
+) -> models.VoiceMessage:
+    msg = models.VoiceMessage(
+        driver_id=driver_id,
+        trip_id=trip_id,
+        file_path=file_path,
+        duration_sec=duration_sec,
+        target=target,
+        note=note,
+        status=status,
+        created_at=datetime.utcnow(),
+    )
+    db.add(msg)
+    db.commit()
+    db.refresh(msg)
+    return msg
+
+
+def list_recent_voice_messages(db: Session, limit: int = 20) -> List[models.VoiceMessage]:
+    return (
+        db.query(models.VoiceMessage)
+        .order_by(models.VoiceMessage.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+def get_operator_dashboard(db: Session, group_tag: Optional[str] = None) -> dict:
+    q = db.query(models.Driver)
+    if group_tag:
+        q = q.filter(models.Driver.group_tag == group_tag)
+    drivers = q.order_by(models.Driver.id.desc()).all()
+
+    items = []
+    active_count = 0
+    for d in drivers:
+        last_trip = (
+            db.query(models.Trip)
+            .filter(models.Trip.driver_id == d.id)
+            .order_by(models.Trip.started_at.desc())
+            .first()
+        )
+        if not last_trip:
+            last_trip_status = "none"
+        elif last_trip.finished_at is None:
+            last_trip_status = "active"
+            active_count += 1
+        else:
+            last_trip_status = "completed"
+
+        last_tel = (
+            db.query(models.TelemetryEvent)
+            .filter(models.TelemetryEvent.driver_id == d.id)
+            .order_by(models.TelemetryEvent.ts.desc())
+            .first()
+        )
+        last_event = None
+        if last_tel and (last_tel.brake_hard or last_tel.accel_hard or last_tel.cornering_hard):
+            flags = []
+            if last_tel.brake_hard:
+                flags.append("brake_hard")
+            if last_tel.accel_hard:
+                flags.append("accel_hard")
+            if last_tel.cornering_hard:
+                flags.append("cornering_hard")
+            last_event = {"type": "telemetry_flag", "flags": flags, "timestamp": last_tel.ts}
+
+        items.append(
+            {
+                "id": d.id,
+                "name": d.name,
+                "phone": d.phone,
+                "company_name": d.company_name,
+                "group_tag": d.group_tag,
+                "last_trip_status": last_trip_status,
+                "last_telemetry": (
+                    {
+                        "lat": last_tel.latitude,
+                        "lng": last_tel.longitude,
+                        "speed": last_tel.speed_kmh,
+                        "timestamp": last_tel.ts,
+                    }
+                    if last_tel
+                    else None
+                ),
+                "last_event": last_event,
+            }
+        )
+
+    return {"active_drivers": active_count, "drivers": items}
+
+
+def get_recent_operator_events(db: Session, group_tag: Optional[str] = None, limit: int = 50) -> List[dict]:
+    q = db.query(models.TelemetryEvent, models.Driver).join(models.Driver, models.Driver.id == models.TelemetryEvent.driver_id)
+    if group_tag:
+        q = q.filter(models.Driver.group_tag == group_tag)
+    q = q.filter(
+        (models.TelemetryEvent.brake_hard == True)
+        | (models.TelemetryEvent.accel_hard == True)
+        | (models.TelemetryEvent.cornering_hard == True)
+    )
+    rows = q.order_by(models.TelemetryEvent.ts.desc()).limit(limit).all()
+
+    events = []
+    for tel, drv in rows:
+        flags = []
+        if tel.brake_hard:
+            flags.append("brake_hard")
+        if tel.accel_hard:
+            flags.append("accel_hard")
+        if tel.cornering_hard:
+            flags.append("cornering_hard")
+        events.append(
+            {
+                "driver_id": drv.id,
+                "driver_name": drv.name,
+                "group_tag": drv.group_tag,
+                "trip_id": tel.trip_id,
+                "flags": flags,
+                "speed_kmh": tel.speed_kmh,
+                "latitude": tel.latitude,
+                "longitude": tel.longitude,
+                "timestamp": tel.ts,
+            }
+        )
+    return events
