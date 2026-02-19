@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 Base = declarative_base()
@@ -11,17 +11,10 @@ def _build_sqlite_url_from_path(path_str: str) -> str:
     path = Path(path_str)
     if path.parent and not path.parent.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-    # Absolute path is recommended inside containers
     return f"sqlite:///{path}"
 
 
 def get_database_url() -> str:
-    """Resolve database URL with precedence:
-
-    1. DRIVER_DB_URL (full SQLAlchemy URL, e.g. PostgreSQL)
-    2. DRIVER_DB_PATH (path to SQLite file)
-    3. Default ./data/driver_service.db (SQLite)
-    """
     url = os.getenv("DRIVER_DB_URL")
     if url:
         return url
@@ -30,7 +23,6 @@ def get_database_url() -> str:
     if path:
         return _build_sqlite_url_from_path(path)
 
-    # default: ./data/driver_service.db
     default_path = Path("data") / "driver_service.db"
     return _build_sqlite_url_from_path(str(default_path))
 
@@ -45,8 +37,71 @@ engine = create_engine(
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
+def _table_columns(conn, table_name: str) -> set[str]:
+    rows = conn.execute(text(f"PRAGMA table_info({table_name})"))
+    return {row[1] for row in rows}
+
+
+def _run_sqlite_migrations() -> None:
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE IF NOT EXISTS sessions (id INTEGER PRIMARY KEY, driver_id INTEGER NOT NULL, token TEXT NOT NULL UNIQUE, created_at DATETIME NOT NULL, last_seen_at DATETIME NOT NULL, FOREIGN KEY(driver_id) REFERENCES drivers(id))"))
+        conn.execute(text("CREATE TABLE IF NOT EXISTS revoked_tokens (id INTEGER PRIMARY KEY, token TEXT NOT NULL UNIQUE, revoked_at DATETIME NOT NULL)"))
+        conn.execute(text("CREATE TABLE IF NOT EXISTS certifications (id INTEGER PRIMARY KEY, driver_id INTEGER NOT NULL, cert_type TEXT NOT NULL, cert_ref TEXT NULL, issued_at DATETIME NOT NULL, FOREIGN KEY(driver_id) REFERENCES drivers(id))"))
+
+        driver_columns = _table_columns(conn, "drivers")
+        alterations = {
+            "phone": "ALTER TABLE drivers ADD COLUMN phone TEXT",
+            "email": "ALTER TABLE drivers ADD COLUMN email TEXT",
+            "name": "ALTER TABLE drivers ADD COLUMN name TEXT",
+            "role": "ALTER TABLE drivers ADD COLUMN role TEXT NOT NULL DEFAULT 'taxi'",
+            "is_verified": "ALTER TABLE drivers ADD COLUMN is_verified INTEGER NOT NULL DEFAULT 0",
+            "wallet_address": "ALTER TABLE drivers ADD COLUMN wallet_address TEXT",
+            "company_token_symbol": "ALTER TABLE drivers ADD COLUMN company_token_symbol TEXT",
+            "verification_code": "ALTER TABLE drivers ADD COLUMN verification_code TEXT",
+            "verification_expires_at": "ALTER TABLE drivers ADD COLUMN verification_expires_at DATETIME",
+            "verification_channel": "ALTER TABLE drivers ADD COLUMN verification_channel TEXT",
+            "failed_attempts": "ALTER TABLE drivers ADD COLUMN failed_attempts INTEGER NOT NULL DEFAULT 0",
+            "created_at": "ALTER TABLE drivers ADD COLUMN created_at DATETIME",
+            "last_login_at": "ALTER TABLE drivers ADD COLUMN last_login_at DATETIME",
+            "last_code_sent_at": "ALTER TABLE drivers ADD COLUMN last_code_sent_at DATETIME",
+            "taxi_company": "ALTER TABLE drivers ADD COLUMN taxi_company TEXT",
+            "plate_number": "ALTER TABLE drivers ADD COLUMN plate_number TEXT",
+            "notes": "ALTER TABLE drivers ADD COLUMN notes TEXT",
+            "company_name": "ALTER TABLE drivers ADD COLUMN company_name TEXT",
+            "group_tag": "ALTER TABLE drivers ADD COLUMN group_tag TEXT",
+        }
+        for col, ddl in alterations.items():
+            if col not in driver_columns:
+                conn.execute(text(ddl))
+
+
+        trip_columns = _table_columns(conn, "trips")
+        trip_alterations = {
+            "company_name": "ALTER TABLE trips ADD COLUMN company_name TEXT",
+            "group_tag": "ALTER TABLE trips ADD COLUMN group_tag TEXT",
+        }
+        for col, ddl in trip_alterations.items():
+            if col not in trip_columns:
+                conn.execute(text(ddl))
+
+        conn.execute(text("UPDATE drivers SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"))
+        conn.execute(text("UPDATE drivers SET role = 'taxi' WHERE role IS NULL OR role = ''"))
+        conn.execute(text("UPDATE drivers SET phone = '+30' || printf('%09d', id) WHERE phone IS NULL OR phone = ''"))
+
+        conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_drivers_phone ON drivers(phone)"))
+        conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_sessions_token ON sessions(token)"))
+        conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_revoked_tokens_token ON revoked_tokens(token)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_certifications_driver_id ON certifications(driver_id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_trips_group_tag ON trips(group_tag)"))
+
+        conn.execute(text("CREATE TABLE IF NOT EXISTS voice_messages (id INTEGER PRIMARY KEY, driver_id INTEGER NOT NULL, trip_id INTEGER NULL, file_path TEXT NOT NULL, duration_sec REAL NULL, target TEXT NULL, note TEXT NULL, status TEXT NOT NULL, created_at DATETIME NOT NULL, FOREIGN KEY(driver_id) REFERENCES drivers(id), FOREIGN KEY(trip_id) REFERENCES trips(id))"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_voice_messages_driver_id ON voice_messages(driver_id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_voice_messages_created_at ON voice_messages(created_at)"))
+
+
 def init_db() -> None:
-    """Create all tables if they do not exist."""
     from . import models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
+    if DATABASE_URL.startswith("sqlite"):
+        _run_sqlite_migrations()
