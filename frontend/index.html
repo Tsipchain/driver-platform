@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Thronos Driver</title>
-    <link id="faviconLink" rel="icon" type="image/png" href="https://thronoschain.org/thronos-coin.png?v=1">
+    <link id="favicon" rel="icon" href="https://thronoschain.org/thronos-coin.png">
     <link rel="apple-touch-icon" href="https://thronoschain.org/thronos-coin.png?v=1">
     <meta name="theme-color" content="#00ff88">
     <link rel="stylesheet" href="./style.css" />
@@ -24,6 +24,8 @@
         <div class="field-group"><label for="loginPhone">Κινητό τηλέφωνο</label><input id="loginPhone" placeholder="π.χ. 69XXXXXXXX" /></div>
         <div class="field-group"><label for="loginEmail">Email (προαιρετικό)</label><input id="loginEmail" placeholder="name@example.com" /></div>
         <div class="field-group"><label for="loginName">Όνομα (προαιρετικό)</label><input id="loginName" placeholder="π.χ. Γιώργος" /></div>
+        <div class="field-group"><label for="loginOrganization">Φορέας (προαιρετικό)</label><select id="loginOrganization"><option value="">— Ελεύθερος επαγγελματίας —</option></select></div>
+        <button class="outline full" id="btnRequestOrg">+ Αίτημα νέου φορέα</button>
         <button class="primary full" id="btnSendCode">Αποστολή κωδικού</button>
 
         <div class="field-group" id="codeWrap" style="display:none; margin-top:10px;">
@@ -32,6 +34,15 @@
           <button class="primary full" id="btnVerifyCode">Επιβεβαίωση</button>
         </div>
         <div class="small-text" id="authMessage"></div>
+      </div>
+
+      <div id="requestOrgModal" class="card" style="display:none;">
+        <div class="card-header"><div class="card-title">Αίτημα νέου φορέα</div><button class="outline" id="btnCloseRequestOrg">Κλείσιμο</button></div>
+        <div class="field-group"><label for="orgReqName">Όνομα φορέα</label><input id="orgReqName" /></div>
+        <div class="field-group"><label for="orgReqCity">Πόλη</label><input id="orgReqCity" /></div>
+        <div class="field-group"><label for="orgReqEmail">Email επικοινωνίας</label><input id="orgReqEmail" /></div>
+        <button class="primary full" id="btnSubmitRequestOrg">Αποστολή αιτήματος</button>
+        <div class="small-text" id="orgReqMsg"></div>
       </div>
 
       <div id="dashboardScreen" style="display:none;">
@@ -60,10 +71,10 @@
           <div class="row"><label><input type="checkbox" id="brakeHard" /> Απότομο φρενάρισμα</label><label><input type="checkbox" id="accelHard" /> Απότομο γκάζι</label><label><input type="checkbox" id="cornerHard" /> Απότομη στροφή</label></div>
           <div class="field-group"><label for="weather">Καιρός</label><select id="weather"><option value="">—</option><option value="clear">Καθαρός</option><option value="rain">Βροχή</option><option value="snow">Χιόνι</option></select></div>
           <div class="field-group"><label for="telemetryNotes">Σχόλιο</label><textarea id="telemetryNotes" rows="2"></textarea></div>
-          <button class="primary full" id="btnSendTelemetry">Αποστολή telemetry</button>
+          <button class="primary full" id="btnSendTelemetry">Send event snapshot</button>
+          <div class="row"><button class="outline full" id="btnStartAutoGps">START AUTO GPS</button><button class="outline full" id="btnStopAutoGps">STOP</button></div>
+          <div class="small-text" id="autoGpsStatus">Auto GPS: OFF</div>
         </div>
-        <button class="primary full" id="btnSendCode">Αποστολή κωδικού</button>
-
         <div class="card">
           <div class="card-header"><div class="card-title">VOICE / CB</div></div>
           <div class="small-text" id="voiceStatus">Πάτα για εγγραφή έως 30s.</div>
@@ -91,6 +102,8 @@
         </div>
         <div class="card"><div id="operatorMap" style="height:280px;border-radius:8px;"></div></div>
         <div class="card"><div class="card-title" id="operatorTableTitle">Drivers</div><div id="operatorTable"></div></div>
+        <div class="card"><div class="card-title">Προς έγκριση</div><div id="operatorPendingList" class="small-text">-</div></div>
+        <div class="card"><div class="card-title">Inbox από οδηγούς</div><div id="operatorVoiceList" class="small-text">-</div></div>
       </div>
     </div>
 
