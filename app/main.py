@@ -96,7 +96,10 @@ def _b2s(value) -> str:
     if value is None:
         return ""
     if isinstance(value, bytes):
-        return value.decode("utf-8", errors="replace")
+        try:
+            return value.decode("utf-8", "replace")
+        except Exception:
+            return repr(value)
     return str(value)
 
 
@@ -112,16 +115,10 @@ def send_code_via_email(email: str, code: str, name_or_phone: str) -> bool:
     use_ssl = os.getenv("DRIVER_SMTP_USE_SSL", "true").lower() in ("1", "true", "yes")
     timeout = int(os.getenv("DRIVER_SMTP_TIMEOUT", "10"))
 
-    from_addr = parseaddr(smtp_from)[1] or smtp_user
-    to_addr = parseaddr(email)[1] or email
-    from_domain = parseaddr(smtp_from)[1].split("@")[-1] if "@" in parseaddr(smtp_from)[1] else "thronoschain.org"
-    msg_id = make_msgid(domain=from_domain)
-
     msg = EmailMessage()
     msg["Subject"] = "[Thronos Driver] Κωδικός σύνδεσης / Login code"
     msg["From"] = smtp_from
     msg["To"] = email
-    msg["Message-ID"] = msg_id
     msg.set_content(
         f"""Γεια σου {name_or_phone},
 
@@ -150,66 +147,96 @@ If you did not request this code, you can safely ignore this email.
 """
     )
 
+    if not msg.get("Message-ID"):
+        msg["Message-ID"] = make_msgid()
+
+    message_id = msg.get("Message-ID")
+
     try:
-        logger.info("SMTP connect: host=%s port=%s ssl=%s msg_id=%s", smtp_host, smtp_port, use_ssl, msg_id)
         if use_ssl:
-            server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=timeout)
+            server_ctx = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=timeout)
         else:
-            server = smtplib.SMTP(smtp_host, smtp_port, timeout=timeout)
+            server_ctx = smtplib.SMTP(smtp_host, smtp_port, timeout=timeout)
 
-        with server:
+        with server_ctx as server:
             ehlo_code, ehlo_resp = server.ehlo()
-            logger.info("SMTP EHLO: code=%s resp=%s", ehlo_code, _b2s(ehlo_resp).strip()[:250])
-
-            if not use_ssl:
-                tls_code, tls_resp = server.starttls()
-                logger.info("SMTP STARTTLS: code=%s resp=%s", tls_code, _b2s(tls_resp).strip()[:250])
-                ehlo2_code, ehlo2_resp = server.ehlo()
-                logger.info("SMTP EHLO2: code=%s resp=%s", ehlo2_code, _b2s(ehlo2_resp).strip()[:250])
-
-            login_code, login_resp = server.login(smtp_user, smtp_password)
-            logger.info("SMTP LOGIN: code=%s resp=%s", login_code, _b2s(login_resp).strip()[:250])
-
-            mail_code, mail_resp = server.mail(from_addr)
-            logger.info("SMTP MAIL FROM: code=%s resp=%s from=%s", mail_code, _b2s(mail_resp).strip()[:250], from_addr)
-
-            rcpt_code, rcpt_resp = server.rcpt(to_addr)
-            logger.info("SMTP RCPT TO: code=%s resp=%s to=%s", rcpt_code, _b2s(rcpt_resp).strip()[:250], to_addr)
-
-            data_code, data_resp = server.data(msg.as_bytes())
-            data_resp_text = _b2s(data_resp).strip()[:250]
-            logger.info("SMTP DATA: code=%s resp=%s msg_id=%s", data_code, data_resp_text, msg_id)
-
-            if 200 <= int(data_code) < 300:
-                logger.info(
-                    "OTP email accepted by relay: to=%s host=%s port=%s ssl=%s msg_id=%s",
-                    email,
-                    smtp_host,
-                    smtp_port,
-                    use_ssl,
-                    msg_id,
-                )
-                return True
-
-            logger.error(
-                "SMTP not accepted: code=%s resp=%s host=%s port=%s ssl=%s msg_id=%s",
-                data_code,
-                data_resp_text,
+            logger.info(
+                "SMTP response EHLO: %s %s host=%s port=%s ssl=%s",
+                ehlo_code,
+                _b2s(ehlo_resp),
                 smtp_host,
                 smtp_port,
                 use_ssl,
-                msg_id,
             )
-            return False
-    except (smtplib.SMTPException, socket.error, OSError) as exc:
+
+            if not use_ssl:
+                tls_code, tls_resp = server.starttls()
+                logger.info(
+                    "SMTP response STARTTLS: %s %s host=%s port=%s",
+                    tls_code,
+                    _b2s(tls_resp),
+                    smtp_host,
+                    smtp_port,
+                )
+                ehlo2_code, ehlo2_resp = server.ehlo()
+                logger.info(
+                    "SMTP response EHLO2: %s %s host=%s port=%s",
+                    ehlo2_code,
+                    _b2s(ehlo2_resp),
+                    smtp_host,
+                    smtp_port,
+                )
+
+            login_code, login_resp = server.login(smtp_user, smtp_password)
+            logger.info(
+                "SMTP response LOGIN: %s %s host=%s port=%s ssl=%s",
+                login_code,
+                _b2s(login_resp),
+                smtp_host,
+                smtp_port,
+                use_ssl,
+            )
+
+            from_addr = parseaddr(msg.get("From", ""))[1] or smtp_user
+            to_addr = parseaddr(email)[1] or email
+
+            refused = server.send_message(msg, from_addr=from_addr, to_addrs=[to_addr])
+            noop_code, noop_resp = server.noop()
+            refused_list = list(refused.keys()) if isinstance(refused, dict) else []
+
+            logger.info(
+                "smtp_send_success host=%s port=%s ssl=%s message_id=%s to=%s refused=%s server_noop=%s %s",
+                smtp_host,
+                smtp_port,
+                use_ssl,
+                message_id,
+                to_addr,
+                refused_list,
+                noop_code,
+                _b2s(noop_resp),
+            )
+
+            if to_addr in refused_list:
+                logger.error(
+                    "smtp_send_refused host=%s port=%s ssl=%s message_id=%s to=%s",
+                    smtp_host,
+                    smtp_port,
+                    use_ssl,
+                    message_id,
+                    to_addr,
+                )
+                return False
+
+        return True
+    except (smtplib.SMTPException, socket.error, OSError) as e:
         logger.exception(
-            "SMTP send failure: to=%s host=%s port=%s ssl=%s msg_id=%s err=%s",
+            "SMTP send failure to=%s host=%s port=%s ssl=%s message_id=%s -> %s",
             email,
             smtp_host,
             smtp_port,
             use_ssl,
-            msg_id,
-            str(exc),
+            message_id,
+            str(e),
         )
         return False
 
@@ -391,7 +418,14 @@ def request_code(req: schemas.AuthRequestCode, db: Session = Depends(get_db)):
     if not phone:
         raise HTTPException(status_code=400, detail="Invalid phone")
 
-    driver = crud.get_or_create_driver_by_phone(db, phone=phone, email=req.email, name=req.name, role=req.role)
+    driver = crud.get_or_create_driver_by_phone(
+        db,
+        phone=phone,
+        email=req.email,
+        name=req.name,
+        role=req.role,
+        group_tag=(req.group_tag or "").strip() or None,
+    )
     now = datetime.utcnow()
     cooldown_seconds = 120
 
@@ -464,7 +498,7 @@ def verify_code(req: schemas.AuthVerifyCode, db: Session = Depends(get_db)):
     crud.create_session_token(db, driver_id=driver.id, token=token)
     return {
         "ok": True,
-        "driver": {"id": driver.id, "name": driver.name, "role": driver.role, "phone": driver.phone},
+        "driver": {"id": driver.id, "name": driver.name, "role": driver.role, "phone": driver.phone, "group_tag": driver.group_tag, "approved": bool(driver.approved)},
         "session_token": token,
     }
 
@@ -490,6 +524,7 @@ def me(current_driver: Driver = Depends(get_current_driver), db: Session = Depen
         "wallet_address": current_driver.wallet_address,
         "company_token_symbol": current_driver.company_token_symbol,
         "group_tag": current_driver.group_tag,
+        "approved": bool(current_driver.approved),
         "company_name": current_driver.company_name,
         "stats": {
             "trips": crud.count_driver_trips(db, current_driver.id),
@@ -548,18 +583,26 @@ def wallet_get(
     }
 
 
+def _require_driver_approved(driver: Driver):
+    if not bool(driver.approved):
+        raise HTTPException(status_code=403, detail="Driver approval pending")
+
+
 @app.post("/api/v1/voice-messages", response_model=schemas.VoiceMessageRead)
 async def api_create_voice_message(
     request: Request,
     current_driver: Driver = Depends(get_current_driver),
     db: Session = Depends(get_db),
 ):
+    _require_driver_approved(current_driver)
+
     content_type = request.headers.get("content-type", "")
     if "multipart/form-data" not in content_type:
         raise HTTPException(status_code=400, detail="Expected multipart/form-data")
 
     raw_body = await request.body()
     file_bytes, incoming_filename, trip_id, note, target, _driver_id, _group_tag = _parse_multipart_voice_payload(raw_body, content_type)
+    target = target or "center"
 
     now = datetime.utcnow()
     ts = now.strftime("%Y%m%d%H%M%S%f")
@@ -584,6 +627,16 @@ async def api_create_voice_message(
     db.commit()
     db.refresh(msg)
     return msg
+
+
+
+@app.post("/api/v1/voice-messages/send", response_model=schemas.VoiceMessageRead)
+async def api_create_voice_message_send_alias(
+    request: Request,
+    current_driver: Driver = Depends(get_current_driver),
+    db: Session = Depends(get_db),
+):
+    return await api_create_voice_message(request=request, current_driver=current_driver, db=db)
 
 
 @app.get("/api/v1/voice-messages/recent")
@@ -625,6 +678,40 @@ def api_operator_dashboard(
     forced_group = _resolve_operator_scope(db, x_admin_token)
     effective_group = forced_group or group_tag
     return crud.get_operator_dashboard(db, group_tag=effective_group)
+
+
+@app.get("/api/operator/pending-drivers")
+def api_operator_pending_drivers(
+    group_tag: Optional[str] = None,
+    x_admin_token: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    forced_group = _resolve_operator_scope(db, x_admin_token)
+    effective_group = forced_group or group_tag
+    q = db.query(models.Driver).filter(models.Driver.approved == False)
+    if effective_group:
+        q = q.filter(models.Driver.group_tag == effective_group)
+    rows = q.order_by(models.Driver.created_at.desc()).limit(200).all()
+    return {"items": [{"id": d.id, "name": d.name, "phone": d.phone, "group_tag": d.group_tag, "approved": bool(d.approved)} for d in rows]}
+
+
+@app.post("/api/operator/drivers/{driver_id}/approve")
+def api_operator_approve_driver(
+    driver_id: int,
+    group_tag: Optional[str] = None,
+    x_admin_token: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    forced_group = _resolve_operator_scope(db, x_admin_token)
+    driver = crud.get_driver(db, driver_id)
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+    effective_group = forced_group or group_tag
+    if effective_group and driver.group_tag != effective_group:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    driver.approved = True
+    db.commit()
+    return {"ok": True, "driver_id": driver.id, "approved": True}
 
 
 @app.get("/api/operator/events/recent")
@@ -713,6 +800,25 @@ def branding_file(group_tag: str, filename: str):
     return FileResponse(file_path)
 
 
+@app.get("/api/v1/voice-messages/operator-inbox")
+def api_operator_voice_inbox(
+    group_tag: Optional[str] = None,
+    limit: int = Query(default=50, ge=1, le=500),
+    x_admin_token: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    forced_group = _resolve_operator_scope(db, x_admin_token)
+    effective_group = forced_group or group_tag
+    q = db.query(models.VoiceMessage).filter(models.VoiceMessage.target == "center")
+    if effective_group:
+        q = q.filter(models.VoiceMessage.group_tag == effective_group)
+    rows = q.order_by(models.VoiceMessage.created_at.desc()).limit(limit).all()
+    return {"items": [
+        {"id": r.id, "driver_id": r.driver_id, "trip_id": r.trip_id, "group_tag": r.group_tag, "note": r.note, "created_at": r.created_at, "audio_url": f"/api/v1/voice-messages/{r.id}/download"}
+        for r in rows
+    ]}
+
+
 @app.get("/api/operator/voice/recent")
 def api_operator_voice_recent(
     group_tag: Optional[str] = None,
@@ -779,10 +885,20 @@ async def api_operator_voice_send(
         status="received",
     )
     row.direction = "to_driver"
+    row.target = "driver"
     row.group_tag = target_driver.group_tag or target_group
     db.commit()
     db.refresh(row)
     return {"ok": True, "id": row.id, "driver_id": row.driver_id, "group_tag": row.group_tag}
+
+
+@app.post("/api/v1/voice-messages/reply-to-driver")
+async def api_voice_reply_to_driver(
+    request: Request,
+    x_admin_token: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    return await api_operator_voice_send(request=request, x_admin_token=x_admin_token, db=db)
 
 
 @app.post("/api/operator/voice/{msg_id}/reply")
@@ -813,6 +929,7 @@ async def api_operator_voice_reply(
 
     row = crud.create_voice_message(db, driver_id=parent.driver_id, trip_id=parent.trip_id, file_path=str(path), note=note, target="cb", status="received")
     row.direction = "down"
+    row.target = "driver"
     row.in_reply_to = parent.id
     row.group_tag = parent.group_tag
     db.commit(); db.refresh(row)
@@ -827,7 +944,7 @@ def api_driver_voice_inbox(
 ):
     q = db.query(models.VoiceMessage).filter(
         models.VoiceMessage.driver_id == current_driver.id,
-        models.VoiceMessage.direction.in_(["down", "to_driver"])
+        models.VoiceMessage.target == "driver"
     )
     if since:
         try:
@@ -898,6 +1015,8 @@ def api_start_trip(
     current_driver: Optional[Driver] = Depends(get_current_driver_optional),
     db: Session = Depends(get_db),
 ):
+    if current_driver:
+        _require_driver_approved(current_driver)
     resolved_driver_id = current_driver.id if current_driver else req.driver_id
     if not resolved_driver_id or not crud.get_driver(db, int(resolved_driver_id)):
         raise HTTPException(status_code=401, detail="Unauthorized")
@@ -931,6 +1050,8 @@ def api_create_telemetry(
     current_driver: Optional[Driver] = Depends(get_current_driver_optional),
     db: Session = Depends(get_db),
 ):
+    if current_driver:
+        _require_driver_approved(current_driver)
     resolved_driver_id = current_driver.id if current_driver else req.driver_id
     if not resolved_driver_id or not crud.get_driver(db, int(resolved_driver_id)):
         raise HTTPException(status_code=401, detail="Unauthorized")

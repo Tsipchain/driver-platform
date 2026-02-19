@@ -23,6 +23,7 @@ class DriverCreate(DriverBase):
 class DriverRead(DriverBase):
     id: int
     is_verified: int
+    approved: bool = False
     wallet_address: Optional[str] = None
     company_token_symbol: Optional[str] = None
 
@@ -119,6 +120,7 @@ class AuthRequestCode(BaseModel):
     email: Optional[str] = None
     name: Optional[str] = None
     role: Optional[str] = "taxi"
+    group_tag: Optional[str] = None
 
 
 class AuthVerifyCode(BaseModel):
