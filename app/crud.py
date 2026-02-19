@@ -342,3 +342,10 @@ def get_recent_operator_events(db: Session, group_tag: Optional[str] = None, lim
             }
         )
     return events
+
+
+def revoke_session_token(db: Session, token: str) -> None:
+    obj = db.query(models.SessionToken).filter(models.SessionToken.token == token).first()
+    if obj:
+        db.delete(obj)
+        db.commit()

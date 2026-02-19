@@ -3,6 +3,7 @@ import os
 import re
 import secrets
 import smtplib
+import socket
 from pathlib import Path
 from datetime import datetime, timedelta
 from email.message import EmailMessage
@@ -56,6 +57,10 @@ def is_production_env() -> bool:
     return (os.getenv("DRIVER_ENV") or "").strip().lower() == "production"
 
 
+def dev_show_code_enabled() -> bool:
+    return (os.getenv("DEV_SHOW_CODE") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def generate_otp_code() -> str:
     fixed = os.getenv("DRIVER_DEV_FIXED_OTP")
     if fixed:
@@ -86,12 +91,7 @@ def send_code_via_email(email: str, code: str, name_or_phone: str) -> bool:
     if not email or not _smtp_enabled() or not _smtp_configured():
         return False
 
-    smtp_host = (os.getenv("DRIVER_SMTP_HOST") or "").strip()
-    smtp_port = int((os.getenv("DRIVER_SMTP_PORT") or "465").strip())
-    smtp_user = (os.getenv("DRIVER_SMTP_USER") or "").strip()
-    smtp_password = os.getenv("DRIVER_SMTP_PASSWORD") or ""
     smtp_from = (os.getenv("DRIVER_SMTP_FROM") or "").strip()
-    smtp_timeout = int((os.getenv("DRIVER_SMTP_TIMEOUT") or "10").strip())
 
     msg = EmailMessage()
     msg["Subject"] = "[Thronos Driver] Κωδικός σύνδεσης / Login code"
@@ -125,14 +125,38 @@ If you did not request this code, you can safely ignore this email.
 """
     )
 
+    smtp_host = os.getenv("DRIVER_SMTP_HOST", "").strip()
+    smtp_port = int(os.getenv("DRIVER_SMTP_PORT", "465"))
+    smtp_user = os.getenv("DRIVER_SMTP_USER", "")
+    smtp_password = os.getenv("DRIVER_SMTP_PASSWORD", "")
+    use_ssl = os.getenv("DRIVER_SMTP_USE_SSL", "true").lower() in ("1", "true", "yes")
+    timeout = int(os.getenv("DRIVER_SMTP_TIMEOUT", "10"))
+
     try:
-        with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=smtp_timeout) as server:
-            server.login(smtp_user, smtp_password)
-            server.send_message(msg)
-        logger.info("OTP email sent to %s", email)
+        if use_ssl:
+            with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=timeout) as server:
+                ehlo_resp = server.ehlo()
+                logger.info("SMTP response EHLO: %s", ehlo_resp)
+                login_resp = server.login(smtp_user, smtp_password)
+                logger.info("SMTP response LOGIN: %s", login_resp)
+                send_resp = server.send_message(msg)
+                logger.info("SMTP response SEND: %s", send_resp)
+        else:
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=timeout) as server:
+                ehlo_resp = server.ehlo()
+                logger.info("SMTP response EHLO: %s", ehlo_resp)
+                tls_resp = server.starttls()
+                logger.info("SMTP response STARTTLS: %s", tls_resp)
+                ehlo_after_tls = server.ehlo()
+                logger.info("SMTP response EHLO_AFTER_TLS: %s", ehlo_after_tls)
+                login_resp = server.login(smtp_user, smtp_password)
+                logger.info("SMTP response LOGIN: %s", login_resp)
+                send_resp = server.send_message(msg)
+                logger.info("SMTP response SEND: %s", send_resp)
+        logger.info("OTP email sent: to=%s via %s:%s (ssl=%s)", email, smtp_host, smtp_port, use_ssl)
         return True
-    except Exception:
-        logger.exception("Failed to send OTP email to %s", email)
+    except (smtplib.SMTPException, socket.error) as e:
+        logger.exception("SMTP send failure to=%s host=%s port=%s ssl=%s -> %s", email, smtp_host, smtp_port, use_ssl, str(e))
         return False
 
 
@@ -276,6 +300,8 @@ def request_code(req: schemas.AuthRequestCode, db: Session = Depends(get_db)):
             return JSONResponse(status_code=429, content={"error": "CODE_TOO_SOON", "retry_after": retry_after})
 
     code = generate_otp_code()
+    if dev_show_code_enabled():
+        logger.warning("DEV OTP for %s = %s", phone, code)
     driver.verification_code = code
     driver.verification_expires_at = now + timedelta(minutes=10)
     driver.last_code_sent_at = now
@@ -339,6 +365,16 @@ def verify_code(req: schemas.AuthVerifyCode, db: Session = Depends(get_db)):
         "driver": {"id": driver.id, "name": driver.name, "role": driver.role, "phone": driver.phone},
         "session_token": token,
     }
+
+
+@auth_router.post("/logout")
+def logout(authorization: Optional[str] = Header(default=None), db: Session = Depends(get_db)):
+    token = None
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization.split(" ", 1)[1].strip()
+    if token:
+        crud.revoke_session_token(db, token)
+    return {"ok": True}
 
 
 @app.get("/api/me")

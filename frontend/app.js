@@ -7,6 +7,7 @@ let mediaChunks = [];
 let mediaStopTimeout = null;
 let operatorMap = null;
 let operatorMarkers = [];
+let tripActive = false;
 
 function $(id) { return document.getElementById(id); }
 function isOperatorMode() { return window.location.pathname.startsWith('/operator') || window.location.pathname.startsWith('/school'); }
@@ -139,6 +140,7 @@ async function startTrip() {
   if (!resp.ok) return toast("Σφάλμα εκκίνησης δρομολογίου.");
   const data = await resp.json();
   localStorage.setItem("current_trip_id", String(data.id));
+  tripActive = true;
   $("tripStatus").textContent = `Trip #${data.id} ενεργό`;
 }
 
@@ -151,6 +153,7 @@ async function finishTrip() {
   const data = await resp.json();
   $("tripStatus").textContent = `Trip #${data.id} ολοκληρώθηκε`;
   localStorage.removeItem("current_trip_id");
+  tripActive = false;
 }
 
 async function sendTelemetry() {
@@ -290,9 +293,21 @@ async function loadOperatorDashboard() {
   renderOperatorData(data);
 }
 
+
+function logout() {
+  if (tripActive) {
+    if (!confirm("Έχεις ενεργή διαδρομή. Θέλεις σίγουρα να αποσυνδεθείς; Αυτό θα ακυρώσει τη διαδρομή.")) return;
+  }
+  try { localStorage.removeItem("driverSessionToken"); } catch (e) {}
+  try { localStorage.removeItem("driverProfile"); } catch (e) {}
+  fetch(`${API_BASE}/api/auth/logout`, { method: "POST", headers: getToken() ? { Authorization: `Bearer ${getToken()}` } : {} })
+    .finally(() => { window.location.href = "/"; });
+}
+
 window.addEventListener("DOMContentLoaded", () => {
   renderAuthState();
   updateRequestCodeButton();
+  tripActive = !!localStorage.getItem("current_trip_id");
 
   if (isOperatorMode()) {
     $("btnLoadOperator")?.addEventListener("click", loadOperatorDashboard);
