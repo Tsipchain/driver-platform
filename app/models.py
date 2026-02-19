@@ -10,15 +10,43 @@ class Driver(Base):
     __tablename__ = "drivers"
 
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(120), nullable=False)
-    phone = Column(String(64), nullable=True)
+    phone = Column(String(64), unique=True, nullable=False, index=True)
+    email = Column(String(255), nullable=True)
+    name = Column(String(120), nullable=True)
+    role = Column(String(32), nullable=False, default="taxi")
+    is_verified = Column(Integer, nullable=False, default=0)
+    wallet_address = Column(String(255), nullable=True)
+    company_token_symbol = Column(String(32), nullable=True)
+    verification_code = Column(String(16), nullable=True)
+    verification_expires_at = Column(DateTime, nullable=True)
+    verification_channel = Column(String(16), nullable=True)
+    failed_attempts = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_login_at = Column(DateTime, nullable=True)
+    last_code_sent_at = Column(DateTime, nullable=True)
+
     taxi_company = Column(String(128), nullable=True)
     plate_number = Column(String(32), nullable=True)
     notes = Column(Text, nullable=True)
+    company_name = Column(String(128), nullable=True)
+    group_tag = Column(String(64), nullable=True, index=True)
 
     trips = relationship("Trip", back_populates="driver", cascade="all, delete-orphan")
     telemetry_events = relationship("TelemetryEvent", back_populates="driver", cascade="all, delete-orphan")
     voice_events = relationship("VoiceEvent", back_populates="driver", cascade="all, delete-orphan")
+    sessions = relationship("SessionToken", back_populates="driver", cascade="all, delete-orphan")
+
+
+class SessionToken(Base):
+    __tablename__ = "sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    driver_id = Column(Integer, ForeignKey("drivers.id"), nullable=False, index=True)
+    token = Column(String(128), nullable=False, unique=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_seen_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    driver = relationship("Driver", back_populates="sessions")
 
 
 class Trip(Base):
@@ -34,6 +62,8 @@ class Trip(Base):
     avg_speed_kmh = Column(Float, nullable=True)
     safety_score = Column(Float, nullable=True)
     notes = Column(Text, nullable=True)
+    company_name = Column(String(128), nullable=True)
+    group_tag = Column(String(64), nullable=True, index=True)
 
     driver = relationship("Driver", back_populates="trips")
     telemetry_events = relationship("TelemetryEvent", back_populates="trip", cascade="all, delete-orphan")
@@ -74,4 +104,21 @@ class VoiceEvent(Base):
     intent_hint = Column(String(64), nullable=True)
 
     driver = relationship("Driver", back_populates="voice_events")
+    trip = relationship("Trip")
+
+
+class VoiceMessage(Base):
+    __tablename__ = "voice_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    driver_id = Column(Integer, ForeignKey("drivers.id"), nullable=False, index=True)
+    trip_id = Column(Integer, ForeignKey("trips.id"), nullable=True, index=True)
+    file_path = Column(String(512), nullable=False)
+    duration_sec = Column(Float, nullable=True)
+    target = Column(String(64), nullable=True)
+    note = Column(Text, nullable=True)
+    status = Column(String(32), nullable=False, default="received")
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    driver = relationship("Driver")
     trip = relationship("Trip")
