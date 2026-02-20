@@ -14,6 +14,8 @@ class DriverBase(BaseModel):
     notes: Optional[str] = None
     company_name: Optional[str] = None
     group_tag: Optional[str] = None
+    organization_id: Optional[int] = None
+    organization_id: Optional[int] = None
 
 
 class DriverCreate(DriverBase):
@@ -23,6 +25,7 @@ class DriverCreate(DriverBase):
 class DriverRead(DriverBase):
     id: int
     is_verified: int
+    approved: bool = False
     wallet_address: Optional[str] = None
     company_token_symbol: Optional[str] = None
 
@@ -119,6 +122,8 @@ class AuthRequestCode(BaseModel):
     email: Optional[str] = None
     name: Optional[str] = None
     role: Optional[str] = "taxi"
+    group_tag: Optional[str] = None
+    organization_id: Optional[int] = None
 
 
 class AuthVerifyCode(BaseModel):
@@ -149,3 +154,42 @@ class VoiceMessageRead(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class OrganizationRead(BaseModel):
+    id: int
+    name: str
+    slug: str
+    type: str
+    status: str
+    default_group_tag: Optional[str] = None
+    title: Optional[str] = None
+    logo_url: Optional[str] = None
+    favicon_url: Optional[str] = None
+    plan: str = "basic"
+    plan_status: str = "trialing"
+    trial_ends_at: Optional[datetime] = None
+    addons_json: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class OrganizationRequestCreate(BaseModel):
+    name: str
+    city: Optional[str] = None
+    contact_email: Optional[str] = None
+    type: str = "taxi"
+
+
+class OrganizationJoinRequest(BaseModel):
+    organization_id: int
+
+
+
+class TrialCreateRequest(BaseModel):
+    company_name: str
+    type: str = "taxi"
+    contact_email: str
+    phone: Optional[str] = None
+

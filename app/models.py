@@ -30,6 +30,8 @@ class Driver(Base):
     notes = Column(Text, nullable=True)
     company_name = Column(String(128), nullable=True)
     group_tag = Column(String(64), nullable=True, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
+    approved = Column(Boolean, nullable=False, default=False)
 
     trips = relationship("Trip", back_populates="driver", cascade="all, delete-orphan")
     telemetry_events = relationship("TelemetryEvent", back_populates="driver", cascade="all, delete-orphan")
@@ -64,6 +66,8 @@ class Trip(Base):
     notes = Column(Text, nullable=True)
     company_name = Column(String(128), nullable=True)
     group_tag = Column(String(64), nullable=True, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
+    reward_points = Column(Float, nullable=True)
 
     driver = relationship("Driver", back_populates="trips")
     telemetry_events = relationship("TelemetryEvent", back_populates="trip", cascade="all, delete-orphan")
@@ -122,6 +126,8 @@ class VoiceMessage(Base):
     in_reply_to = Column(Integer, nullable=True)
     read_at = Column(DateTime, nullable=True)
     group_tag = Column(String(64), nullable=True, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
+    approved = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     driver = relationship("Driver")
@@ -148,6 +154,52 @@ class Certification(Base):
     driver = relationship("Driver")
 
 
+class Organization(Base):
+    __tablename__ = "organizations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(128), nullable=False)
+    slug = Column(String(128), nullable=False, unique=True, index=True)
+    type = Column(String(32), nullable=False, default="taxi")
+    status = Column(String(32), nullable=False, default="pending")
+    default_group_tag = Column(String(64), nullable=True, index=True)
+    title = Column(String(128), nullable=True)
+    logo_url = Column(String(512), nullable=True)
+    favicon_url = Column(String(512), nullable=True)
+    token_symbol = Column(String(32), nullable=True)
+    treasury_wallet = Column(String(255), nullable=True)
+    reward_policy_json = Column(Text, nullable=True)
+    plan = Column(String(32), nullable=False, default="basic")
+    plan_status = Column(String(32), nullable=False, default="trialing")
+    trial_ends_at = Column(DateTime, nullable=True)
+    addons_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class OrganizationMember(Base):
+    __tablename__ = "organization_members"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    driver_id = Column(Integer, ForeignKey("drivers.id"), nullable=False, index=True)
+    role = Column(String(32), nullable=False, default="driver")
+    approved = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class OrganizationRequest(Base):
+    __tablename__ = "organization_requests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(128), nullable=False)
+    slug = Column(String(128), nullable=False, unique=True, index=True)
+    city = Column(String(128), nullable=True)
+    contact_email = Column(String(255), nullable=True)
+    type = Column(String(32), nullable=False, default="taxi")
+    status = Column(String(32), nullable=False, default="pending")
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class TenantBranding(Base):
     __tablename__ = "tenant_branding"
 
@@ -165,8 +217,23 @@ class OperatorToken(Base):
     __tablename__ = "operator_tokens"
 
     id = Column(Integer, primary_key=True, index=True)
-    group_tag = Column(String(64), nullable=False, index=True)
+    group_tag = Column(String(64), nullable=True, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
     token_hash = Column(String(128), nullable=False, unique=True, index=True)
     role = Column(String(32), nullable=False, default="operator")
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     last_used_at = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime, nullable=True)
+
+
+class TrialAttempt(Base):
+    __tablename__ = "trial_attempts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    ip_address = Column(String(64), nullable=True, index=True)
+    contact_email = Column(String(255), nullable=True, index=True)
+    phone = Column(String(64), nullable=True, index=True)
+    company_name = Column(String(128), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    success = Column(Boolean, nullable=False, default=False)
+

@@ -9,12 +9,27 @@ let operatorMap = null;
 let operatorMarkers = [];
 let tripActive = false;
 let cbInboxTimer = null;
+let autoGpsWatchId = null;
+let autoGpsSendTimer = null;
+let lastGpsPoint = null;
+const DEFAULT_FAVICON = "https://thronoschain.org/thronos-coin.png";
 
 function $(id) { return document.getElementById(id); }
 function isOperatorMode() { return window.location.pathname.startsWith('/operator') || window.location.pathname.startsWith('/school'); }
 function isSchoolMode() { return window.location.pathname.startsWith('/school'); }
 
 function toast(msg) { alert(msg); }
+
+function setFavicon(url) {
+  let link = document.getElementById("favicon") || document.querySelector("link[rel~='icon']");
+  if (!link) {
+    link = document.createElement("link");
+    link.rel = "icon";
+    link.id = "favicon";
+    document.head.appendChild(link);
+  }
+  link.href = url || DEFAULT_FAVICON;
+}
 
 async function applyBranding() {
   const qpGroup = new URLSearchParams(window.location.search).get("group_tag");
@@ -35,12 +50,52 @@ async function applyBranding() {
     if (!resp.ok) return;
     const b = await resp.json();
     document.title = b.title || b.app_name || 'Thronos Driver';
-    const favicon = document.getElementById('faviconLink');
-    if (favicon && b.favicon_url) favicon.href = b.favicon_url;
+    setFavicon(b.favicon_url);
     if (b.primary_color) document.documentElement.style.setProperty('--accent', b.primary_color);
   } catch (_) {}
 }
 
+
+
+async function loadOrganizations() {
+  const sel = $("loginOrganization");
+  if (!sel) return;
+  try {
+    const resp = await fetch(`${API_BASE}/api/organizations?status=active`);
+    if (!resp.ok) return;
+    const items = await resp.json();
+    sel.innerHTML = '<option value="">— Ελεύθερος επαγγελματίας —</option>' + (items || []).map(o => `<option value="${o.id}" data-group="${o.default_group_tag || ""}">${o.name}</option>`).join('');
+    const opSel = $("operatorOrgSelect");
+    if (opSel) {
+      opSel.innerHTML = '<option value="">Επιλογή οργανισμού</option>' + (items || []).map(o => `<option value="${o.id}" data-group="${o.default_group_tag || ""}">${o.name}</option>`).join('');
+    }
+  } catch (_) {}
+}
+
+function openRequestOrgModal() {
+  if ($("requestOrgModal")) $("requestOrgModal").style.display = "block";
+  if ($("loginScreen")) $("loginScreen").style.display = "none";
+}
+
+function closeRequestOrgModal() {
+  if ($("requestOrgModal")) $("requestOrgModal").style.display = "none";
+  if ($("loginScreen") && !getToken()) $("loginScreen").style.display = "block";
+}
+
+async function submitOrganizationRequest() {
+  const payload = {
+    name: $("orgReqName")?.value.trim(),
+    city: $("orgReqCity")?.value.trim() || null,
+    contact_email: $("orgReqEmail")?.value.trim() || null,
+    type: "taxi",
+  };
+  const resp = await fetch(`${API_BASE}/api/organizations/request`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  $("orgReqMsg").textContent = resp.ok ? "Το αίτημα καταχωρήθηκε." : "Αποτυχία αιτήματος.";
+}
 
 function updateRequestCodeButton() {
   const btn = $("btnSendCode");
@@ -113,6 +168,7 @@ function renderAuthState() {
   $("loginScreen").style.display = hasToken ? "none" : "block";
   const sendBtn = $("btnSendCode"); if (sendBtn) sendBtn.style.display = hasToken ? "none" : "inline-flex";
   $("dashboardScreen").style.display = hasToken ? "block" : "none";
+  if ($("requestOrgModal")) $("requestOrgModal").style.display = "none";
   $("profileScreen").style.display = "none";
   $("operatorScreen").style.display = "none";
   if (hasToken) updateHeaderProfile();
@@ -168,6 +224,7 @@ async function requestCode() {
     email: $("loginEmail").value.trim() || null,
     name: $("loginName").value.trim() || null,
     role: "taxi",
+    organization_id: $("loginOrganization")?.value ? Number($("loginOrganization").value) : null,
   };
 
   const resp = await apiFetch("/api/auth/request-code", { method: "POST", body: JSON.stringify(payload), skipUnauthorizedRedirect: true });
@@ -222,6 +279,7 @@ async function finishTrip() {
   $("tripStatus").textContent = `Trip #${data.id} ολοκληρώθηκε`;
   localStorage.removeItem("current_trip_id");
   tripActive = false;
+  stopAutoGps();
 }
 
 async function sendTelemetry() {
@@ -242,6 +300,12 @@ async function sendTelemetry() {
   const resp = await apiFetch("/api/v1/telemetry", { method: "POST", body: JSON.stringify(payload) });
   if (!resp.ok) return toast("Σφάλμα αποστολής telemetry.");
   $("telemetryNotes").value = "";
+}
+
+
+async function sendTelemetrySnapshot() {
+  if (!tripActive) return;
+  await sendTelemetry();
 }
 
 async function startVoiceRecording() {
@@ -282,8 +346,8 @@ async function uploadVoice() {
     form.append("file", blob, `voice-${Date.now()}.webm`);
     const tripId = localStorage.getItem("current_trip_id");
     if (tripId) form.append("trip_id", tripId);
-    form.append("target", "cb");
-    const resp = await apiFetch("/api/v1/voice-messages", { method: "POST", body: form });
+    form.append("target", "center");
+    const resp = await apiFetch("/api/v1/voice-messages/send", { method: "POST", body: form });
     if (!resp.ok) throw new Error("upload failed");
     $("voiceStatus").textContent = "Το φωνητικό μήνυμα στάλθηκε.";
     toast("Voice sent");
@@ -350,9 +414,34 @@ function renderOperatorData(data) {
   $("operatorTable").innerHTML = `<table style="width:100%;font-size:12px;"><thead><tr><th>Name</th><th>Status</th><th>Speed</th><th>Last ts</th></tr></thead><tbody>${rows || '<tr><td colspan="4">No data</td></tr>'}</tbody></table>`;
 }
 
+function getOperatorToken() {
+  return $("operatorAdminToken")?.value.trim() || localStorage.getItem("operator_token") || "";
+}
+
+function getOperatorGroupTag() {
+  return localStorage.getItem("operator_group_tag") || "";
+}
+
+function openOperatorLoginModal() {
+  $("operatorLoginModal")?.style && ($("operatorLoginModal").style.display = "block");
+}
+
+function closeOperatorLoginModal() {
+  $("operatorLoginModal")?.style && ($("operatorLoginModal").style.display = "none");
+}
+
+function submitOperatorLogin() {
+  const token = $("operatorAdminToken")?.value.trim() || "";
+  const group = $("operatorOrgSelect")?.selectedOptions?.[0]?.getAttribute("data-group") || "";
+  if (token) localStorage.setItem("operator_token", token);
+  localStorage.setItem("operator_group_tag", group || "");
+  if ($("operatorAuthState")) $("operatorAuthState").textContent = token ? "Authenticated" : "Not authenticated";
+  closeOperatorLoginModal();
+}
+
 async function loadOperatorDashboard() {
-  const token = $("operatorAdminToken").value.trim();
-  const groupTag = $("operatorGroupTag").value.trim();
+  const token = getOperatorToken();
+  const groupTag = getOperatorGroupTag();
   const qs = new URLSearchParams();
   if (groupTag) qs.set("group_tag", groupTag);
   const resp = await fetch(`${API_BASE}/api/operator/dashboard?${qs.toString()}`, { headers: { "X-Admin-Token": token } });
@@ -362,24 +451,35 @@ async function loadOperatorDashboard() {
 }
 
 
-function logout() {
-  if (tripActive) {
-    if (!confirm("Έχεις ενεργή διαδρομή. Θέλεις σίγουρα να αποσυνδεθείς; Αυτό θα ακυρώσει τη διαδρομή.")) return;
+async function logout() {
+  const token = localStorage.getItem("session_token") || getToken();
+  localStorage.removeItem("session_token");
+  localStorage.removeItem("me");
+  localStorage.removeItem("driverSessionToken");
+  localStorage.removeItem("driverProfile");
+
+  try {
+    if (token) {
+      await fetch(`${API_BASE}/api/auth/logout`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    }
+  } catch (e) {
+    console.warn("logout failed", e);
   }
-  const token = getToken();
-  try { localStorage.removeItem("driverSessionToken"); } catch (e) {}
-  try { localStorage.removeItem("driverProfile"); } catch (e) {}
-  fetch(`${API_BASE}/api/auth/logout`, { method: "POST", headers: token ? { Authorization: `Bearer ${token}` } : {} })
-    .finally(() => { window.location.href = "/"; });
+
+  renderAuthState();
+  window.location.href = "/app";
 }
 
 
 async function loadOperatorVoice() {
-  const token = $("operatorAdminToken").value.trim();
-  const groupTag = $("operatorGroupTag").value.trim();
+  const token = getOperatorToken();
+  const groupTag = getOperatorGroupTag();
   const qs = new URLSearchParams();
   if (groupTag) qs.set('group_tag', groupTag);
-  const resp = await fetch(`${API_BASE}/api/operator/voice/recent?${qs.toString()}`, { headers: { 'X-Admin-Token': token } });
+  const resp = await fetch(`${API_BASE}/api/v1/voice-messages/operator-inbox?${qs.toString()}`, { headers: { 'X-Admin-Token': token } });
   if (!resp.ok) return;
   const data = await resp.json();
   let host = document.getElementById('operatorVoiceList');
@@ -387,12 +487,12 @@ async function loadOperatorVoice() {
     const c=document.createElement('div'); c.className='card'; c.innerHTML='<div class="card-title">Voice/CB</div><div id="operatorVoiceList"></div>';
     document.getElementById('operatorScreen')?.appendChild(c); host=document.getElementById('operatorVoiceList');
   }
-  host.innerHTML=(data.items||[]).map(i=>`<div style="margin:8px 0;">#${i.id} driver:${i.driver_id} <button data-reply="${i.id}" class="outline">Reply</button></div>`).join('')||'No voice';
-  host.querySelectorAll('button[data-reply]').forEach(btn=>btn.onclick=()=>replyOperatorVoice(btn.getAttribute('data-reply')));
+  host.innerHTML=(data.items||[]).map(i=>`<div style="margin:8px 0;">#${i.id} driver:${i.driver_id} <audio controls preload="none" src="${i.audio_url || `/api/v1/voice-messages/${i.id}/download`}" style="width:100%;margin:6px 0;"></audio><button data-driver="${i.driver_id}" class="outline">Reply</button></div>`).join('')||'No voice';
+  host.querySelectorAll('button[data-driver]').forEach(btn=>btn.onclick=()=>replyOperatorVoice(btn.getAttribute('data-driver')));
 }
 
-async function replyOperatorVoice(id) {
-  const token = $("operatorAdminToken").value.trim();
+async function replyOperatorVoice(driverId) {
+  const token = getOperatorToken();
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   const chunks=[];
   const rec = new MediaRecorder(stream, { mimeType: 'audio/webm' });
@@ -402,32 +502,118 @@ async function replyOperatorVoice(id) {
     const form=new FormData();
     form.append('file', new Blob(chunks,{type:'audio/webm'}), `reply-${Date.now()}.webm`);
     form.append('note','reply');
-    const r=await fetch(`${API_BASE}/api/operator/voice/${id}/reply`, { method:'POST', headers:{'X-Admin-Token':token}, body:form });
+    form.append("driver_id", String(driverId));
+    form.append("target", "driver");
+    const r=await fetch(`${API_BASE}/api/v1/voice-messages/reply-to-driver`, { method:'POST', headers:{'X-Admin-Token':token}, body:form });
     if(r.ok) toast('Reply sent'); else toast('Reply failed');
   };
   rec.start();
   setTimeout(()=>{ if(rec.state==='recording') rec.stop(); }, 5000);
 }
 
+
+function updateAutoGpsStatus(text) {
+  if ($("autoGpsStatus")) $("autoGpsStatus").textContent = text;
+}
+
+function estimateSpeedKmh(prev, curr) {
+  if (!prev || !curr || !prev.ts || !curr.ts) return null;
+  const dt = (curr.ts - prev.ts) / 1000;
+  if (dt <= 0) return null;
+  const R = 6371000;
+  const toRad = (v) => (v * Math.PI) / 180;
+  const dLat = toRad(curr.lat - prev.lat);
+  const dLon = toRad(curr.lng - prev.lng);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(prev.lat)) * Math.cos(toRad(curr.lat)) * Math.sin(dLon / 2) ** 2;
+  const d = 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return (d / dt) * 3.6;
+}
+
+function startAutoGps() {
+  if (!navigator.geolocation) return toast("Geolocation not supported");
+  if (!tripActive) return toast("Ξεκίνα πρώτα διαδρομή.");
+  if (autoGpsWatchId) return;
+  autoGpsWatchId = navigator.geolocation.watchPosition((pos) => {
+    const lat = pos.coords.latitude;
+    const lng = pos.coords.longitude;
+    let speed = pos.coords.speed != null ? Number(pos.coords.speed) * 3.6 : null;
+    const nowPoint = { lat, lng, ts: Date.now() };
+    if (speed == null) speed = estimateSpeedKmh(lastGpsPoint, nowPoint);
+    lastGpsPoint = nowPoint;
+    if ($("gpsLat")) $("gpsLat").value = lat.toFixed(6);
+    if ($("gpsLng")) $("gpsLng").value = lng.toFixed(6);
+    if ($("speed") && speed != null) $("speed").value = speed.toFixed(1);
+    updateAutoGpsStatus("Auto GPS: ON");
+  }, (err) => {
+    updateAutoGpsStatus(`Auto GPS error: ${err.message}`);
+  }, { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 });
+
+  if (autoGpsSendTimer) clearInterval(autoGpsSendTimer);
+  autoGpsSendTimer = setInterval(() => { sendTelemetrySnapshot().catch(() => {}); }, 8000);
+}
+
+function stopAutoGps() {
+  if (autoGpsWatchId) navigator.geolocation.clearWatch(autoGpsWatchId);
+  if (autoGpsSendTimer) clearInterval(autoGpsSendTimer);
+  autoGpsWatchId = null;
+  autoGpsSendTimer = null;
+  lastGpsPoint = null;
+  updateAutoGpsStatus("Auto GPS: OFF");
+}
+
+async function loadPendingDrivers() {
+  const token = getOperatorToken();
+  const groupTag = getOperatorGroupTag();
+  const qs = new URLSearchParams();
+  if (groupTag) qs.set("group_tag", groupTag);
+  const resp = await fetch(`${API_BASE}/api/operator/pending-drivers?${qs.toString()}`, { headers: { "X-Admin-Token": token } });
+  if (!resp.ok) return;
+  const data = await resp.json();
+  const host = $("operatorPendingList");
+  if (!host) return;
+  host.innerHTML = (data.items || []).map(d => `<div style="margin:8px 0;">${d.name || d.phone} (${d.group_tag || '-'}) <button class="outline" data-approve="${d.id}">Approve</button></div>`).join("") || "No pending drivers";
+  host.querySelectorAll("button[data-approve]").forEach((btn) => btn.onclick = async () => {
+    const id = btn.getAttribute("data-approve");
+    const r = await fetch(`${API_BASE}/api/operator/drivers/${id}/approve`, { method: "POST", headers: { "X-Admin-Token": token } });
+    if (r.ok) {
+      await loadPendingDrivers();
+      await loadOperatorDashboard();
+    }
+  });
+}
+
 window.addEventListener("DOMContentLoaded", () => {
   renderAuthState();
   updateRequestCodeButton();
+  loadOrganizations();
   tripActive = !!localStorage.getItem("current_trip_id");
   applyBranding();
   if (getToken()) startCbInboxPolling();
 
   if (isOperatorMode()) {
-    $("btnLoadOperator")?.addEventListener("click", async () => { await loadOperatorDashboard(); await loadOperatorVoice(); });
+    if ($("operatorAuthState")) $("operatorAuthState").textContent = getOperatorToken() ? "Authenticated" : "Not authenticated";
+    $("btnOperatorLogin")?.addEventListener("click", openOperatorLoginModal);
+    $("btnCloseOperatorLogin")?.addEventListener("click", closeOperatorLoginModal);
+    $("btnSubmitOperatorLogin")?.addEventListener("click", submitOperatorLogin);
+    $("btnLoadOperator")?.addEventListener("click", async () => { await loadOperatorDashboard(); await loadOperatorVoice(); await loadPendingDrivers(); });
     initOperatorMap();
     applyBranding();
     return;
   }
 
   $("btnSendCode")?.addEventListener("click", requestCode);
+  $("btnOperatorLogin")?.addEventListener("click", openOperatorLoginModal);
+  $("btnCloseOperatorLogin")?.addEventListener("click", closeOperatorLoginModal);
+  $("btnSubmitOperatorLogin")?.addEventListener("click", submitOperatorLogin);
+  $("btnRequestOrg")?.addEventListener("click", openRequestOrgModal);
+  $("btnCloseRequestOrg")?.addEventListener("click", closeRequestOrgModal);
+  $("btnSubmitRequestOrg")?.addEventListener("click", submitOrganizationRequest);
   $("btnVerifyCode")?.addEventListener("click", verifyCode);
   $("btnStartTrip")?.addEventListener("click", startTrip);
   $("btnFinishTrip")?.addEventListener("click", finishTrip);
   $("btnSendTelemetry")?.addEventListener("click", sendTelemetry);
+  $("btnStartAutoGps")?.addEventListener("click", startAutoGps);
+  $("btnStopAutoGps")?.addEventListener("click", stopAutoGps);
   $("btnVoiceRecord")?.addEventListener("click", startVoiceRecording);
   $("btnVoiceStop")?.addEventListener("click", stopVoiceRecording);
   $("btnOpenProfile")?.addEventListener("click", openProfile);
@@ -436,4 +622,5 @@ window.addEventListener("DOMContentLoaded", () => {
     $("dashboardScreen").style.display = "block";
   });
   $("btnSaveWallet")?.addEventListener("click", saveWallet);
+  $("logoutBtn")?.addEventListener("click", logout);
 });
