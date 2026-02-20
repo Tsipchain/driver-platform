@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional, Tuple
 
 from sqlalchemy import case, func
@@ -226,6 +226,8 @@ def create_voice_message(
     target: Optional[str] = None,
     note: Optional[str] = None,
     status: str = "received",
+    group_tag: Optional[str] = None,
+    organization_id: Optional[int] = None,
 ) -> models.VoiceMessage:
     msg = models.VoiceMessage(
         driver_id=driver_id,
@@ -395,3 +397,126 @@ def get_organization(db: Session, organization_id: int) -> Optional[models.Organ
 
 def get_org_member(db: Session, organization_id: int, driver_id: int) -> Optional[models.OrganizationMember]:
     return db.query(models.OrganizationMember).filter(models.OrganizationMember.organization_id == organization_id, models.OrganizationMember.driver_id == driver_id).first()
+
+
+
+def create_trial_attempt(
+    db: Session,
+    *,
+    ip_hash: str,
+    email_hash: str,
+    phone_hash: Optional[str],
+    status: str,
+    retry_after: Optional[int] = None,
+    organization_id: Optional[int] = None,
+    error_code: Optional[str] = None,
+) -> models.TrialAttempt:
+    row = models.TrialAttempt(
+        ip_hash=ip_hash,
+        email_hash=email_hash,
+        phone_hash=phone_hash,
+        status=status,
+        retry_after=retry_after,
+        organization_id=organization_id,
+        error_code=error_code,
+        created_at=datetime.utcnow(),
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
+def count_trial_attempts_since(
+    db: Session,
+    *,
+    since: datetime,
+    ip_hash: Optional[str] = None,
+    email_hash: Optional[str] = None,
+    phone_hash: Optional[str] = None,
+    statuses: Optional[tuple[str, ...]] = None,
+) -> int:
+    q = db.query(models.TrialAttempt).filter(models.TrialAttempt.created_at >= since)
+    if ip_hash is not None:
+        q = q.filter(models.TrialAttempt.ip_hash == ip_hash)
+    if email_hash is not None:
+        q = q.filter(models.TrialAttempt.email_hash == email_hash)
+    if phone_hash is not None:
+        q = q.filter(models.TrialAttempt.phone_hash == phone_hash)
+    if statuses:
+        q = q.filter(models.TrialAttempt.status.in_(statuses))
+    return q.count()
+
+
+def _retry_after_for_window(
+    db: Session,
+    *,
+    now: datetime,
+    ip_hash: Optional[str] = None,
+    email_hash: Optional[str] = None,
+    phone_hash: Optional[str] = None,
+    statuses: Optional[tuple[str, ...]] = None,
+    window_sec: int,
+) -> int:
+    since = now - timedelta(seconds=window_sec)
+    q = db.query(models.TrialAttempt).filter(models.TrialAttempt.created_at >= since)
+    if ip_hash is not None:
+        q = q.filter(models.TrialAttempt.ip_hash == ip_hash)
+    if email_hash is not None:
+        q = q.filter(models.TrialAttempt.email_hash == email_hash)
+    if phone_hash is not None:
+        q = q.filter(models.TrialAttempt.phone_hash == phone_hash)
+    if statuses:
+        q = q.filter(models.TrialAttempt.status.in_(statuses))
+    oldest = q.order_by(models.TrialAttempt.created_at.asc()).first()
+    if not oldest:
+        return window_sec
+    elapsed = int((now - oldest.created_at).total_seconds())
+    return max(1, window_sec - elapsed)
+
+
+def enforce_trial_rate_limit_db(
+    db: Session,
+    *,
+    now: datetime,
+    ip_hash: str,
+    email_hash: str,
+    phone_hash: Optional[str],
+    short_window_sec: int,
+    long_window_sec: int,
+    max_ip_short: int,
+    max_email_short: int,
+    max_ip_email_short: int,
+    max_phone_short: int,
+    max_ip_long: int,
+    max_email_long: int,
+    max_phone_long: int,
+) -> tuple[bool, int, str]:
+    short_since = now - timedelta(seconds=short_window_sec)
+    long_since = now - timedelta(seconds=long_window_sec)
+
+    email_statuses = ("accepted", "created")
+
+    checks = [
+        {"count": count_trial_attempts_since(db, since=short_since, ip_hash=ip_hash), "limit": max_ip_short, "window": short_window_sec, "code": "RL_IP_SHORT", "filters": {"ip_hash": ip_hash}, "statuses": None},
+        {"count": count_trial_attempts_since(db, since=short_since, email_hash=email_hash, statuses=email_statuses), "limit": max_email_short, "window": short_window_sec, "code": "RL_EMAIL_SHORT", "filters": {"email_hash": email_hash}, "statuses": email_statuses},
+        {"count": count_trial_attempts_since(db, since=short_since, ip_hash=ip_hash, email_hash=email_hash), "limit": max_ip_email_short, "window": short_window_sec, "code": "RL_IP_EMAIL_SHORT", "filters": {"ip_hash": ip_hash, "email_hash": email_hash}, "statuses": None},
+        {"count": count_trial_attempts_since(db, since=long_since, ip_hash=ip_hash), "limit": max_ip_long, "window": long_window_sec, "code": "RL_IP_LONG", "filters": {"ip_hash": ip_hash}, "statuses": None},
+        {"count": count_trial_attempts_since(db, since=long_since, email_hash=email_hash, statuses=email_statuses), "limit": max_email_long, "window": long_window_sec, "code": "RL_EMAIL_LONG", "filters": {"email_hash": email_hash}, "statuses": email_statuses},
+    ]
+    if phone_hash:
+        checks.extend([
+            {"count": count_trial_attempts_since(db, since=short_since, phone_hash=phone_hash, statuses=email_statuses), "limit": max_phone_short, "window": short_window_sec, "code": "RL_PHONE_SHORT", "filters": {"phone_hash": phone_hash}, "statuses": email_statuses},
+            {"count": count_trial_attempts_since(db, since=long_since, phone_hash=phone_hash, statuses=email_statuses), "limit": max_phone_long, "window": long_window_sec, "code": "RL_PHONE_LONG", "filters": {"phone_hash": phone_hash}, "statuses": email_statuses},
+        ])
+
+    for check in checks:
+        if check["count"] >= check["limit"]:
+            retry_after = _retry_after_for_window(
+                db,
+                now=now,
+                window_sec=check["window"],
+                statuses=check["statuses"],
+                **check["filters"],
+            )
+            return False, retry_after, check["code"]
+    return True, 0, ""

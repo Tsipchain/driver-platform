@@ -46,26 +46,64 @@ def normalize_phone(phone: str) -> str:
 
 
 
-def slugify_text(value: str) -> str:
-    base = re.sub(r"[^a-z0-9]+", "-", (value or "").strip().lower())
-    base = re.sub(r"-+", "-", base).strip("-")
-    return base or f"org-{secrets.token_hex(3)}"
+def make_slug(name: str) -> str:
+    value = (name or "").strip().lower().replace("_", " ")
+    value = re.sub(r"\s+", "-", value)
+    value = re.sub(r"[^a-z0-9-]", "", value)
+    value = re.sub(r"-+", "-", value).strip("-")
+    value = value[:40].rstrip("-")
+    return value or "org"
 
-def make_unique_slug(db: Session, company_name: str) -> str:
-    base = slugify_text(company_name)
+
+def make_unique_slug(db: Session, base_slug_or_name: str) -> str:
+    base = make_slug(base_slug_or_name)
     slug = base
     n = 1
     while db.query(models.Organization).filter(models.Organization.slug == slug).first() is not None:
         n += 1
-        slug = f"{base}-{n}"
+        suffix = f"-{n}"
+        slug = f"{base[: max(1, 40 - len(suffix))]}{suffix}"
     return slug
 
 
-def _client_ip(request: Request) -> str:
+def get_client_ip(request: Request) -> str:
     xff = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
     if xff:
         return xff
     return request.client.host if request.client else "unknown"
+
+
+def _trial_hash_salt() -> str:
+    return (os.getenv("TRIAL_HASH_SALT") or "").strip()
+
+
+def _sha(value: Optional[str]) -> str:
+    val = (value or "").strip()
+    return hashlib.sha256(f"{_trial_hash_salt()}|{val}".encode("utf-8")).hexdigest()
+
+
+def _trial_limits() -> dict:
+    return {
+        "short": int(os.getenv("TRIAL_RL_WINDOW_SHORT_SEC", "900")),
+        "long": int(os.getenv("TRIAL_RL_WINDOW_LONG_SEC", "86400")),
+        "ip_short": int(os.getenv("TRIAL_RL_MAX_IP_SHORT", "5")),
+        "email_short": int(os.getenv("TRIAL_RL_MAX_EMAIL_SHORT", "3")),
+        "ip_email_short": int(os.getenv("TRIAL_RL_MAX_IP_EMAIL_SHORT", "2")),
+        "phone_short": int(os.getenv("TRIAL_RL_MAX_PHONE_SHORT", "2")),
+        "ip_long": int(os.getenv("TRIAL_RL_MAX_IP_LONG", "25")),
+        "email_long": int(os.getenv("TRIAL_RL_MAX_EMAIL_LONG", "6")),
+        "phone_long": int(os.getenv("TRIAL_RL_MAX_PHONE_LONG", "6")),
+    }
+
+
+def enqueue_thronos_receipt(org_id: int, provider_event_id: str, amount: float, currency: str) -> dict:
+    return {
+        "queued": True,
+        "organization_id": org_id,
+        "provider_event_id": provider_event_id,
+        "amount": amount,
+        "currency": currency,
+    }
 
 
 def mask_value(email: Optional[str], phone: str) -> str:
@@ -761,56 +799,118 @@ def api_plans():
     }
 
 
-@app.post("/api/trials/create")
+@app.post("/api/trials/create", status_code=201)
 def api_create_trial(req: schemas.TrialCreateRequest, request: Request, db: Session = Depends(get_db)):
-    ip_address = _client_ip(request)
-    contact_email = (req.contact_email or "").strip().lower()
-    phone = normalize_phone(req.phone or "") if req.phone else None
-    company_name = (req.company_name or "").strip()
     now = datetime.utcnow()
-    window_start = now - timedelta(hours=1)
+    company_name = (req.company_name or "").strip()
+    contact_email = (req.contact_email or "").strip().lower()
+    phone = (req.phone or "").strip() or None
+    phone_norm = re.sub(r"\s+", "", phone) if phone else None
 
-    by_ip = db.query(models.TrialAttempt).filter(models.TrialAttempt.ip_address == ip_address, models.TrialAttempt.created_at >= window_start).count()
-    by_email = db.query(models.TrialAttempt).filter(models.TrialAttempt.contact_email == contact_email, models.TrialAttempt.created_at >= window_start).count() if contact_email else 0
-    by_phone = db.query(models.TrialAttempt).filter(models.TrialAttempt.phone == phone, models.TrialAttempt.created_at >= window_start).count() if phone else 0
-    rate_limited = by_ip >= 8 or by_email >= 4 or by_phone >= 4
-
-    attempt = models.TrialAttempt(
-        ip_address=ip_address,
-        contact_email=contact_email or None,
-        phone=phone,
-        company_name=company_name,
-        created_at=now,
-        success=False,
-    )
-    db.add(attempt)
-
-    if rate_limited:
+    ip_hash = _sha(get_client_ip(request))
+    if not company_name or not contact_email or "@" not in contact_email:
+        crud.create_trial_attempt(
+            db,
+            ip_hash=ip_hash,
+            email_hash=_sha(contact_email),
+            phone_hash=_sha(phone_norm) if phone_norm else None,
+            status="invalid",
+            error_code="TRIAL_INVALID_INPUT",
+        )
         db.commit()
-        raise HTTPException(status_code=429, detail="Too many trial attempts. Please try later.")
+        raise HTTPException(status_code=400, detail="Invalid trial payload")
 
-    slug = make_unique_slug(db, company_name)
-    row = models.Organization(
-        name=company_name,
-        slug=slug,
-        type=req.type,
-        status="active",
-        default_group_tag=f"{slug}-a",
-        title=company_name,
-        plan="basic",
-        plan_status="trialing",
-        trial_ends_at=now + timedelta(days=14),
-        created_at=now,
+    email_hash = _sha(contact_email)
+    phone_hash = _sha(phone_norm) if phone_norm else None
+
+    limits = _trial_limits()
+    allowed, retry_after, error_code = crud.enforce_trial_rate_limit_db(
+        db,
+        now=now,
+        ip_hash=ip_hash,
+        email_hash=email_hash,
+        phone_hash=phone_hash,
+        short_window_sec=limits["short"],
+        long_window_sec=limits["long"],
+        max_ip_short=limits["ip_short"],
+        max_email_short=limits["email_short"],
+        max_ip_email_short=limits["ip_email_short"],
+        max_phone_short=limits["phone_short"],
+        max_ip_long=limits["ip_long"],
+        max_email_long=limits["email_long"],
+        max_phone_long=limits["phone_long"],
     )
-    db.add(row)
-    db.flush()
 
-    attempt.success = True
-    db.commit()
-    db.refresh(row)
+    if not allowed:
+        crud.create_trial_attempt(
+            db,
+            ip_hash=ip_hash,
+            email_hash=email_hash,
+            phone_hash=phone_hash,
+            status="rate_limited",
+            retry_after=retry_after,
+            error_code="TRIAL_RATE_LIMIT",
+        )
+        db.commit()
+        return JSONResponse(status_code=429, content={"error": "TRIAL_RATE_LIMIT", "retry_after": retry_after})
+
+    attempt = crud.create_trial_attempt(
+        db,
+        ip_hash=ip_hash,
+        email_hash=email_hash,
+        phone_hash=phone_hash,
+        status="accepted",
+    )
+
+    try:
+        slug = make_unique_slug(db, company_name)
+        row = models.Organization(
+            name=company_name,
+            slug=slug,
+            type=req.type,
+            status="active",
+            default_group_tag=f"{slug}-a",
+            title=company_name,
+            plan="basic",
+            plan_status="trialing",
+            trial_ends_at=now + timedelta(days=14),
+            addons_json="{}",
+            billing_name=company_name,
+            billing_email=contact_email,
+            created_at=now,
+        )
+        db.add(row)
+        db.flush()
+
+        attempt.status = "created"
+        attempt.organization_id = row.id
+        db.commit()
+        db.refresh(row)
+    except Exception:
+        db.rollback()
+        crud.create_trial_attempt(
+            db,
+            ip_hash=ip_hash,
+            email_hash=email_hash,
+            phone_hash=phone_hash,
+            status="error",
+            error_code="TRIAL_CREATE_ERROR",
+        )
+        db.commit()
+        raise
+
+    logger.info(
+        "trial_created org_id=%s slug=%s ip_hash=%s email_hash=%s phone_hash=%s",
+        row.id,
+        row.slug,
+        ip_hash[:10],
+        email_hash[:10],
+        (phone_hash or "")[:10],
+    )
+
     return {
-        "ok": True,
         "organization_id": row.id,
+        "name": row.name,
         "slug": row.slug,
         "group_tag": row.default_group_tag,
         "trial_ends_at": row.trial_ends_at,
@@ -828,7 +928,7 @@ def api_list_organizations(
 
 @app.post("/api/organizations/request")
 def api_organization_request(req: schemas.OrganizationRequestCreate, db: Session = Depends(get_db)):
-    slug = slugify_text(req.name)
+    slug = make_slug(req.name)
     existing = db.query(models.OrganizationRequest).filter(models.OrganizationRequest.slug == slug).first()
     if existing:
         return {"ok": True, "id": existing.id, "status": existing.status}

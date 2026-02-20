@@ -15,7 +15,6 @@ class DriverBase(BaseModel):
     company_name: Optional[str] = None
     group_tag: Optional[str] = None
     organization_id: Optional[int] = None
-    organization_id: Optional[int] = None
 
 
 class DriverCreate(DriverBase):
