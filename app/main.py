@@ -45,6 +45,12 @@ def normalize_phone(phone: str) -> str:
     return cleaned
 
 
+
+def slugify_text(value: str) -> str:
+    base = re.sub(r"[^a-z0-9]+", "-", (value or "").strip().lower())
+    base = re.sub(r"-+", "-", base).strip("-")
+    return base or f"org-{secrets.token_hex(3)}"
+
 def mask_value(email: Optional[str], phone: str) -> str:
     if email:
         parts = email.split("@")
@@ -96,7 +102,10 @@ def _b2s(value) -> str:
     if value is None:
         return ""
     if isinstance(value, bytes):
-        return value.decode("utf-8", errors="replace")
+        try:
+            return value.decode("utf-8", "replace")
+        except Exception:
+            return repr(value)
     return str(value)
 
 
@@ -112,16 +121,10 @@ def send_code_via_email(email: str, code: str, name_or_phone: str) -> bool:
     use_ssl = os.getenv("DRIVER_SMTP_USE_SSL", "true").lower() in ("1", "true", "yes")
     timeout = int(os.getenv("DRIVER_SMTP_TIMEOUT", "10"))
 
-    from_addr = parseaddr(smtp_from)[1] or smtp_user
-    to_addr = parseaddr(email)[1] or email
-    from_domain = parseaddr(smtp_from)[1].split("@")[-1] if "@" in parseaddr(smtp_from)[1] else "thronoschain.org"
-    msg_id = make_msgid(domain=from_domain)
-
     msg = EmailMessage()
     msg["Subject"] = "[Thronos Driver] Κωδικός σύνδεσης / Login code"
     msg["From"] = smtp_from
     msg["To"] = email
-    msg["Message-ID"] = msg_id
     msg.set_content(
         f"""Γεια σου {name_or_phone},
 
@@ -150,66 +153,96 @@ If you did not request this code, you can safely ignore this email.
 """
     )
 
+    if not msg.get("Message-ID"):
+        msg["Message-ID"] = make_msgid()
+
+    message_id = msg.get("Message-ID")
+
     try:
-        logger.info("SMTP connect: host=%s port=%s ssl=%s msg_id=%s", smtp_host, smtp_port, use_ssl, msg_id)
         if use_ssl:
-            server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=timeout)
+            server_ctx = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=timeout)
         else:
-            server = smtplib.SMTP(smtp_host, smtp_port, timeout=timeout)
+            server_ctx = smtplib.SMTP(smtp_host, smtp_port, timeout=timeout)
 
-        with server:
+        with server_ctx as server:
             ehlo_code, ehlo_resp = server.ehlo()
-            logger.info("SMTP EHLO: code=%s resp=%s", ehlo_code, _b2s(ehlo_resp).strip()[:250])
-
-            if not use_ssl:
-                tls_code, tls_resp = server.starttls()
-                logger.info("SMTP STARTTLS: code=%s resp=%s", tls_code, _b2s(tls_resp).strip()[:250])
-                ehlo2_code, ehlo2_resp = server.ehlo()
-                logger.info("SMTP EHLO2: code=%s resp=%s", ehlo2_code, _b2s(ehlo2_resp).strip()[:250])
-
-            login_code, login_resp = server.login(smtp_user, smtp_password)
-            logger.info("SMTP LOGIN: code=%s resp=%s", login_code, _b2s(login_resp).strip()[:250])
-
-            mail_code, mail_resp = server.mail(from_addr)
-            logger.info("SMTP MAIL FROM: code=%s resp=%s from=%s", mail_code, _b2s(mail_resp).strip()[:250], from_addr)
-
-            rcpt_code, rcpt_resp = server.rcpt(to_addr)
-            logger.info("SMTP RCPT TO: code=%s resp=%s to=%s", rcpt_code, _b2s(rcpt_resp).strip()[:250], to_addr)
-
-            data_code, data_resp = server.data(msg.as_bytes())
-            data_resp_text = _b2s(data_resp).strip()[:250]
-            logger.info("SMTP DATA: code=%s resp=%s msg_id=%s", data_code, data_resp_text, msg_id)
-
-            if 200 <= int(data_code) < 300:
-                logger.info(
-                    "OTP email accepted by relay: to=%s host=%s port=%s ssl=%s msg_id=%s",
-                    email,
-                    smtp_host,
-                    smtp_port,
-                    use_ssl,
-                    msg_id,
-                )
-                return True
-
-            logger.error(
-                "SMTP not accepted: code=%s resp=%s host=%s port=%s ssl=%s msg_id=%s",
-                data_code,
-                data_resp_text,
+            logger.info(
+                "SMTP response EHLO: %s %s host=%s port=%s ssl=%s",
+                ehlo_code,
+                _b2s(ehlo_resp),
                 smtp_host,
                 smtp_port,
                 use_ssl,
-                msg_id,
             )
-            return False
-    except (smtplib.SMTPException, socket.error, OSError) as exc:
+
+            if not use_ssl:
+                tls_code, tls_resp = server.starttls()
+                logger.info(
+                    "SMTP response STARTTLS: %s %s host=%s port=%s",
+                    tls_code,
+                    _b2s(tls_resp),
+                    smtp_host,
+                    smtp_port,
+                )
+                ehlo2_code, ehlo2_resp = server.ehlo()
+                logger.info(
+                    "SMTP response EHLO2: %s %s host=%s port=%s",
+                    ehlo2_code,
+                    _b2s(ehlo2_resp),
+                    smtp_host,
+                    smtp_port,
+                )
+
+            login_code, login_resp = server.login(smtp_user, smtp_password)
+            logger.info(
+                "SMTP response LOGIN: %s %s host=%s port=%s ssl=%s",
+                login_code,
+                _b2s(login_resp),
+                smtp_host,
+                smtp_port,
+                use_ssl,
+            )
+
+            from_addr = parseaddr(msg.get("From", ""))[1] or smtp_user
+            to_addr = parseaddr(email)[1] or email
+
+            refused = server.send_message(msg, from_addr=from_addr, to_addrs=[to_addr])
+            noop_code, noop_resp = server.noop()
+            refused_list = list(refused.keys()) if isinstance(refused, dict) else []
+
+            logger.info(
+                "smtp_send_success host=%s port=%s ssl=%s message_id=%s to=%s refused=%s server_noop=%s %s",
+                smtp_host,
+                smtp_port,
+                use_ssl,
+                message_id,
+                to_addr,
+                refused_list,
+                noop_code,
+                _b2s(noop_resp),
+            )
+
+            if to_addr in refused_list:
+                logger.error(
+                    "smtp_send_refused host=%s port=%s ssl=%s message_id=%s to=%s",
+                    smtp_host,
+                    smtp_port,
+                    use_ssl,
+                    message_id,
+                    to_addr,
+                )
+                return False
+
+        return True
+    except (smtplib.SMTPException, socket.error, OSError) as e:
         logger.exception(
-            "SMTP send failure: to=%s host=%s port=%s ssl=%s msg_id=%s err=%s",
+            "SMTP send failure to=%s host=%s port=%s ssl=%s message_id=%s -> %s",
             email,
             smtp_host,
             smtp_port,
             use_ssl,
-            msg_id,
-            str(exc),
+            message_id,
+            str(e),
         )
         return False
 
@@ -280,22 +313,27 @@ def _hash_token(raw: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def _resolve_operator_scope(db: Session, x_admin_token: Optional[str]) -> Optional[str]:
-    token = (x_admin_token or "").strip()
+def _resolve_operator_scope(db: Session, token: Optional[str]) -> tuple[Optional[str], Optional[int]]:
     if not token:
-        return None
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    token = token.strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
     global_token = _get_admin_token()
     if global_token and token == global_token:
-        return None  # full access
+        return None, None  # full access
 
     hashed = _hash_token(token)
     row = db.query(models.OperatorToken).filter(models.OperatorToken.token_hash == hashed).first()
     if not row:
         raise HTTPException(status_code=401, detail="Unauthorized")
+    if row.expires_at and row.expires_at < datetime.utcnow():
+        raise HTTPException(status_code=401, detail="Token expired")
     row.last_used_at = datetime.utcnow()
     db.commit()
-    return row.group_tag
+    return row.group_tag, row.organization_id
 
 
 def _branding_defaults(group_tag: Optional[str]) -> dict:
@@ -309,6 +347,49 @@ def _branding_defaults(group_tag: Optional[str]) -> dict:
         "primary_color": "#00ff88",
     }
 
+
+
+PLANS_MATRIX = {
+    "basic": {
+        "features": ["trips", "telemetry_manual", "telemetry_auto_gps", "operator_map_basic", "otp_login", "voice_send_only"],
+    },
+    "pro": {
+        "features": ["trips", "telemetry_manual", "telemetry_auto_gps", "operator_map_basic", "voice_send_only", "voice_reply", "events_filters", "exports_pdf", "white_label_branding", "retention_12m"],
+    },
+    "enterprise": {
+        "features": ["trips", "telemetry_manual", "telemetry_auto_gps", "operator_map_basic", "voice_send_only", "voice_reply", "events_filters", "exports_pdf", "white_label_branding", "retention_12m", "multi_org", "custom_domain", "rewards_module"],
+    },
+}
+
+
+def _addons_set(addons_json: Optional[str]) -> set[str]:
+    if not addons_json:
+        return set()
+    try:
+        import json
+        data = json.loads(addons_json)
+        if isinstance(data, list):
+            return {str(x) for x in data}
+        if isinstance(data, dict):
+            return {k for k, v in data.items() if v}
+    except Exception:
+        return set()
+    return set()
+
+
+def is_feature_enabled(org: Optional[models.Organization], feature: str) -> bool:
+    if org is None:
+        return feature in PLANS_MATRIX["basic"]["features"]
+    plan = (org.plan or "basic").lower()
+    base = set(PLANS_MATRIX.get(plan, PLANS_MATRIX["basic"])["features"])
+    addons = _addons_set(org.addons_json)
+    if "white_label" in addons:
+        base.add("white_label_branding")
+    if "rewards" in addons:
+        base.add("rewards_module")
+    if "pdf_packs" in addons:
+        base.add("exports_pdf")
+    return feature in base
 
 def _parse_multipart_voice_payload(raw_body: bytes, content_type: str) -> tuple[bytes, str, Optional[int], Optional[str], Optional[str], Optional[int], Optional[str]]:
     boundary_marker = "boundary="
@@ -391,7 +472,26 @@ def request_code(req: schemas.AuthRequestCode, db: Session = Depends(get_db)):
     if not phone:
         raise HTTPException(status_code=400, detail="Invalid phone")
 
-    driver = crud.get_or_create_driver_by_phone(db, phone=phone, email=req.email, name=req.name, role=req.role)
+    driver = crud.get_or_create_driver_by_phone(
+        db,
+        phone=phone,
+        email=req.email,
+        name=req.name,
+        role=req.role,
+        group_tag=None,
+        organization_id=req.organization_id,
+    )
+    if req.organization_id:
+        org = crud.get_organization(db, int(req.organization_id))
+        if not org or org.status != "active":
+            raise HTTPException(status_code=400, detail="Invalid organization")
+        driver.organization_id = org.id
+        driver.approved = False
+        driver.group_tag = None
+        member = crud.get_org_member(db, org.id, driver.id)
+        if not member:
+            member = models.OrganizationMember(organization_id=org.id, driver_id=driver.id, role="driver", approved=False, created_at=datetime.utcnow())
+            db.add(member)
     now = datetime.utcnow()
     cooldown_seconds = 120
 
@@ -464,7 +564,7 @@ def verify_code(req: schemas.AuthVerifyCode, db: Session = Depends(get_db)):
     crud.create_session_token(db, driver_id=driver.id, token=token)
     return {
         "ok": True,
-        "driver": {"id": driver.id, "name": driver.name, "role": driver.role, "phone": driver.phone},
+        "driver": {"id": driver.id, "name": driver.name, "role": driver.role, "phone": driver.phone, "group_tag": driver.group_tag, "organization_id": driver.organization_id, "approved": bool(driver.approved)},
         "session_token": token,
     }
 
@@ -490,6 +590,8 @@ def me(current_driver: Driver = Depends(get_current_driver), db: Session = Depen
         "wallet_address": current_driver.wallet_address,
         "company_token_symbol": current_driver.company_token_symbol,
         "group_tag": current_driver.group_tag,
+        "organization_id": current_driver.organization_id,
+        "approved": bool(current_driver.approved),
         "company_name": current_driver.company_name,
         "stats": {
             "trips": crud.count_driver_trips(db, current_driver.id),
@@ -548,18 +650,26 @@ def wallet_get(
     }
 
 
+def _require_driver_approved(driver: Driver):
+    if not bool(driver.approved):
+        raise HTTPException(status_code=403, detail="Driver approval pending")
+
+
 @app.post("/api/v1/voice-messages", response_model=schemas.VoiceMessageRead)
 async def api_create_voice_message(
     request: Request,
     current_driver: Driver = Depends(get_current_driver),
     db: Session = Depends(get_db),
 ):
+    _require_driver_approved(current_driver)
+
     content_type = request.headers.get("content-type", "")
     if "multipart/form-data" not in content_type:
         raise HTTPException(status_code=400, detail="Expected multipart/form-data")
 
     raw_body = await request.body()
     file_bytes, incoming_filename, trip_id, note, target, _driver_id, _group_tag = _parse_multipart_voice_payload(raw_body, content_type)
+    target = target or "center"
 
     now = datetime.utcnow()
     ts = now.strftime("%Y%m%d%H%M%S%f")
@@ -584,6 +694,16 @@ async def api_create_voice_message(
     db.commit()
     db.refresh(msg)
     return msg
+
+
+
+@app.post("/api/v1/voice-messages/send", response_model=schemas.VoiceMessageRead)
+async def api_create_voice_message_send_alias(
+    request: Request,
+    current_driver: Driver = Depends(get_current_driver),
+    db: Session = Depends(get_db),
+):
+    return await api_create_voice_message(request=request, current_driver=current_driver, db=db)
 
 
 @app.get("/api/v1/voice-messages/recent")
@@ -616,15 +736,200 @@ def api_recent_voice_messages(
     return {"items": out}
 
 
+@app.get("/api/plans")
+def api_plans():
+    return {
+        "plans": PLANS_MATRIX,
+        "addons": ["white_label", "extra_retention", "pdf_packs", "ai_scoring", "rewards"],
+    }
+
+
+@app.post("/api/trials/create")
+def api_create_trial(req: schemas.TrialCreateRequest, db: Session = Depends(get_db)):
+    slug = slugify_text(req.name)
+    row = db.query(models.Organization).filter(models.Organization.slug == slug).first()
+    if row:
+        return {"ok": True, "organization_id": row.id, "plan_status": row.plan_status}
+    row = models.Organization(
+        name=req.name.strip(),
+        slug=slug,
+        type=req.type,
+        status="active",
+        default_group_tag=f"{slug}-a",
+        title=req.name.strip(),
+        plan="basic",
+        plan_status="trialing",
+        trial_ends_at=datetime.utcnow() + timedelta(days=14),
+        created_at=datetime.utcnow(),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {"ok": True, "organization_id": row.id, "plan_status": row.plan_status, "trial_ends_at": row.trial_ends_at}
+
+
+@app.get("/api/organizations", response_model=List[schemas.OrganizationRead])
+def api_list_organizations(
+    type: Optional[str] = None,
+    status: Optional[str] = "active",
+    db: Session = Depends(get_db),
+):
+    return crud.list_organizations(db, org_type=type, status=status)
+
+
+@app.post("/api/organizations/request")
+def api_organization_request(req: schemas.OrganizationRequestCreate, db: Session = Depends(get_db)):
+    slug = slugify_text(req.name)
+    existing = db.query(models.OrganizationRequest).filter(models.OrganizationRequest.slug == slug).first()
+    if existing:
+        return {"ok": True, "id": existing.id, "status": existing.status}
+    row = models.OrganizationRequest(
+        name=req.name.strip(),
+        slug=slug,
+        city=(req.city or "").strip() or None,
+        contact_email=(req.contact_email or "").strip() or None,
+        type=req.type or "taxi",
+        status="pending",
+        created_at=datetime.utcnow(),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {"ok": True, "id": row.id, "status": row.status}
+
+
+@app.post("/api/organizations/{organization_id}/approve")
+def api_organization_approve(
+    organization_id: int,
+    x_admin_token: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    _resolve_operator_scope(db, x_admin_token)
+    row = crud.get_organization(db, organization_id)
+    if not row:
+        req = db.query(models.OrganizationRequest).filter(models.OrganizationRequest.id == organization_id).first()
+        if not req:
+            raise HTTPException(status_code=404, detail="Organization not found")
+        row = models.Organization(
+            name=req.name,
+            slug=req.slug,
+            type=req.type,
+            status="active",
+            default_group_tag=req.slug + "-a",
+            title=req.name,
+            created_at=datetime.utcnow(),
+        )
+        req.status = "approved"
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return {"ok": True, "organization_id": row.id, "status": row.status}
+    row.status = "active"
+    db.commit()
+    return {"ok": True, "organization_id": row.id, "status": row.status}
+
+
+@app.post("/api/organizations/{organization_id}/join")
+def api_organization_join(
+    organization_id: int,
+    current_driver: Driver = Depends(get_current_driver),
+    db: Session = Depends(get_db),
+):
+    org = crud.get_organization(db, organization_id)
+    if not org or org.status != "active":
+        raise HTTPException(status_code=404, detail="Organization not found")
+    current_driver.organization_id = org.id
+    current_driver.approved = False
+    current_driver.group_tag = None
+    member = crud.get_org_member(db, org.id, current_driver.id)
+    if not member:
+        member = models.OrganizationMember(organization_id=org.id, driver_id=current_driver.id, role="driver", approved=False, created_at=datetime.utcnow())
+        db.add(member)
+    db.commit()
+    return {"ok": True, "pending": True}
+
+
+@app.post("/api/organizations/{organization_id}/members/{driver_id}/approve")
+def api_organization_member_approve(
+    organization_id: int,
+    driver_id: int,
+    x_admin_token: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    forced_group, forced_org = _resolve_operator_scope(db, x_admin_token)
+    if forced_org and forced_org != organization_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    org = crud.get_organization(db, organization_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    if forced_group and org.default_group_tag != forced_group:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    driver = crud.get_driver(db, driver_id)
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+    member = crud.get_org_member(db, organization_id, driver_id)
+    if not member:
+        member = models.OrganizationMember(organization_id=organization_id, driver_id=driver_id, role="driver", approved=True, created_at=datetime.utcnow())
+        db.add(member)
+    member.approved = True
+    driver.organization_id = organization_id
+    driver.group_tag = org.default_group_tag
+    driver.approved = True
+    db.commit()
+    return {"ok": True, "driver_id": driver_id, "approved": True, "group_tag": driver.group_tag}
+
+
 @app.get("/api/operator/dashboard")
 def api_operator_dashboard(
     group_tag: Optional[str] = None,
     x_admin_token: Optional[str] = Header(default=None),
     db: Session = Depends(get_db),
 ):
-    forced_group = _resolve_operator_scope(db, x_admin_token)
-    effective_group = forced_group or group_tag
+    forced_group, forced_org = _resolve_operator_scope(db, x_admin_token)
+    if forced_org:
+        org = crud.get_organization(db, forced_org)
+        effective_group = (org.default_group_tag if org else None) or forced_group
+    else:
+        effective_group = forced_group or group_tag
     return crud.get_operator_dashboard(db, group_tag=effective_group)
+
+
+@app.get("/api/operator/pending-drivers")
+def api_operator_pending_drivers(
+    group_tag: Optional[str] = None,
+    x_admin_token: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    forced_group, forced_org = _resolve_operator_scope(db, x_admin_token)
+    effective_group = forced_group or group_tag
+    q = db.query(models.Driver).filter(models.Driver.approved == False)
+    if forced_org:
+        q = q.filter(models.Driver.organization_id == forced_org)
+    if effective_group:
+        q = q.filter(models.Driver.group_tag == effective_group)
+    rows = q.order_by(models.Driver.created_at.desc()).limit(200).all()
+    return {"items": [{"id": d.id, "name": d.name, "phone": d.phone, "group_tag": d.group_tag, "approved": bool(d.approved)} for d in rows]}
+
+
+@app.post("/api/operator/drivers/{driver_id}/approve")
+def api_operator_approve_driver(
+    driver_id: int,
+    group_tag: Optional[str] = None,
+    x_admin_token: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    forced_group, forced_org = _resolve_operator_scope(db, x_admin_token)
+    driver = crud.get_driver(db, driver_id)
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+    effective_group = forced_group or group_tag
+    if forced_org and driver.organization_id != forced_org:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if effective_group and driver.group_tag and driver.group_tag != effective_group:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    driver.approved = True
+    db.commit()
+    return {"ok": True, "driver_id": driver.id, "approved": True}
 
 
 @app.get("/api/operator/events/recent")
@@ -634,15 +939,23 @@ def api_operator_recent_events(
     x_admin_token: Optional[str] = Header(default=None),
     db: Session = Depends(get_db),
 ):
-    forced_group = _resolve_operator_scope(db, x_admin_token)
-    effective_group = forced_group or group_tag
+    forced_group, forced_org = _resolve_operator_scope(db, x_admin_token)
+    if forced_org:
+        org = crud.get_organization(db, forced_org)
+        effective_group = (org.default_group_tag if org else None) or forced_group
+    else:
+        effective_group = forced_group or group_tag
     return {"events": crud.get_recent_operator_events(db, group_tag=effective_group, limit=limit)}
 
 
 
 
 @app.get("/api/branding")
-def api_branding(group_tag: Optional[str] = None, db: Session = Depends(get_db)):
+def api_branding(group_tag: Optional[str] = None, org: Optional[int] = None, db: Session = Depends(get_db)):
+    if org and not group_tag:
+        org_row = crud.get_organization(db, org)
+        if org_row:
+            group_tag = org_row.default_group_tag
     defaults = _branding_defaults(group_tag)
     if not group_tag:
         return defaults
@@ -671,6 +984,10 @@ async def api_admin_branding(request: Request, x_admin_token: Optional[str] = He
     group_tag = (form.get("group_tag") or "").strip()
     if not group_tag:
         raise HTTPException(status_code=400, detail="group_tag required")
+
+    org = db.query(models.Organization).filter(models.Organization.default_group_tag == group_tag).first()
+    if org and not is_feature_enabled(org, "white_label_branding"):
+        raise HTTPException(status_code=403, detail="Branding available on Pro/Enterprise or addon")
 
     row = db.query(models.TenantBranding).filter(models.TenantBranding.group_tag == group_tag).first()
     if not row:
@@ -713,6 +1030,27 @@ def branding_file(group_tag: str, filename: str):
     return FileResponse(file_path)
 
 
+@app.get("/api/v1/voice-messages/operator-inbox")
+def api_operator_voice_inbox(
+    group_tag: Optional[str] = None,
+    limit: int = Query(default=50, ge=1, le=500),
+    x_admin_token: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    forced_group, forced_org = _resolve_operator_scope(db, x_admin_token)
+    effective_group = forced_group or group_tag
+    q = db.query(models.VoiceMessage).filter(models.VoiceMessage.target == "center")
+    if forced_org:
+        q = q.join(models.Driver, models.Driver.id == models.VoiceMessage.driver_id).filter(models.Driver.organization_id == forced_org)
+    if effective_group:
+        q = q.filter(models.VoiceMessage.group_tag == effective_group)
+    rows = q.order_by(models.VoiceMessage.created_at.desc()).limit(limit).all()
+    return {"items": [
+        {"id": r.id, "driver_id": r.driver_id, "trip_id": r.trip_id, "group_tag": r.group_tag, "note": r.note, "created_at": r.created_at, "audio_url": f"/api/v1/voice-messages/{r.id}/download"}
+        for r in rows
+    ]}
+
+
 @app.get("/api/operator/voice/recent")
 def api_operator_voice_recent(
     group_tag: Optional[str] = None,
@@ -720,9 +1058,11 @@ def api_operator_voice_recent(
     x_admin_token: Optional[str] = Header(default=None),
     db: Session = Depends(get_db),
 ):
-    forced_group = _resolve_operator_scope(db, x_admin_token)
+    forced_group, forced_org = _resolve_operator_scope(db, x_admin_token)
     effective_group = forced_group or group_tag
     q = db.query(models.VoiceMessage).filter(models.VoiceMessage.direction == "up")
+    if forced_org:
+        q = q.join(models.Driver, models.Driver.id == models.VoiceMessage.driver_id).filter(models.Driver.organization_id == forced_org)
     if effective_group:
         q = q.filter(models.VoiceMessage.group_tag == effective_group)
     rows = q.order_by(models.VoiceMessage.created_at.desc()).limit(limit).all()
@@ -738,7 +1078,7 @@ async def api_operator_voice_send(
     x_admin_token: Optional[str] = Header(default=None),
     db: Session = Depends(get_db),
 ):
-    forced_group = _resolve_operator_scope(db, x_admin_token)
+    forced_group, forced_org = _resolve_operator_scope(db, x_admin_token)
     if "multipart/form-data" not in (request.headers.get("content-type") or ""):
         raise HTTPException(status_code=400, detail="Expected multipart/form-data")
 
@@ -753,6 +1093,12 @@ async def api_operator_voice_send(
             raise HTTPException(status_code=404, detail="Driver not found")
         if forced_group and target_driver.group_tag != forced_group:
             raise HTTPException(status_code=403, detail="Forbidden")
+        if forced_org and target_driver.organization_id != forced_org:
+            raise HTTPException(status_code=403, detail="Forbidden")
+        if target_driver.organization_id:
+            org = crud.get_organization(db, target_driver.organization_id)
+            if not is_feature_enabled(org, "voice_reply"):
+                raise HTTPException(status_code=403, detail="Voice reply not enabled for plan")
         target_group = target_driver.group_tag or target_group
     elif target_group:
         q = db.query(models.Driver).filter(models.Driver.group_tag == target_group)
@@ -779,10 +1125,20 @@ async def api_operator_voice_send(
         status="received",
     )
     row.direction = "to_driver"
+    row.target = "driver"
     row.group_tag = target_driver.group_tag or target_group
     db.commit()
     db.refresh(row)
     return {"ok": True, "id": row.id, "driver_id": row.driver_id, "group_tag": row.group_tag}
+
+
+@app.post("/api/v1/voice-messages/reply-to-driver")
+async def api_voice_reply_to_driver(
+    request: Request,
+    x_admin_token: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    return await api_operator_voice_send(request=request, x_admin_token=x_admin_token, db=db)
 
 
 @app.post("/api/operator/voice/{msg_id}/reply")
@@ -792,7 +1148,7 @@ async def api_operator_voice_reply(
     x_admin_token: Optional[str] = Header(default=None),
     db: Session = Depends(get_db),
 ):
-    forced_group = _resolve_operator_scope(db, x_admin_token)
+    forced_group, forced_org = _resolve_operator_scope(db, x_admin_token)
     parent = db.query(models.VoiceMessage).filter(models.VoiceMessage.id == msg_id).first()
     if not parent:
         raise HTTPException(status_code=404, detail="Message not found")
@@ -813,6 +1169,7 @@ async def api_operator_voice_reply(
 
     row = crud.create_voice_message(db, driver_id=parent.driver_id, trip_id=parent.trip_id, file_path=str(path), note=note, target="cb", status="received")
     row.direction = "down"
+    row.target = "driver"
     row.in_reply_to = parent.id
     row.group_tag = parent.group_tag
     db.commit(); db.refresh(row)
@@ -827,7 +1184,7 @@ def api_driver_voice_inbox(
 ):
     q = db.query(models.VoiceMessage).filter(
         models.VoiceMessage.driver_id == current_driver.id,
-        models.VoiceMessage.direction.in_(["down", "to_driver"])
+        models.VoiceMessage.target == "driver"
     )
     if since:
         try:
@@ -868,7 +1225,7 @@ def api_voice_download(
             if sess and sess.driver_id == row.driver_id:
                 return FileResponse(row.file_path)
 
-    forced_group = _resolve_operator_scope(db, x_admin_token)
+    forced_group, forced_org = _resolve_operator_scope(db, x_admin_token)
     if forced_group is not None and row.group_tag != forced_group:
         raise HTTPException(status_code=403, detail="Forbidden")
     if x_admin_token:
@@ -898,6 +1255,8 @@ def api_start_trip(
     current_driver: Optional[Driver] = Depends(get_current_driver_optional),
     db: Session = Depends(get_db),
 ):
+    if current_driver:
+        _require_driver_approved(current_driver)
     resolved_driver_id = current_driver.id if current_driver else req.driver_id
     if not resolved_driver_id or not crud.get_driver(db, int(resolved_driver_id)):
         raise HTTPException(status_code=401, detail="Unauthorized")
@@ -931,6 +1290,8 @@ def api_create_telemetry(
     current_driver: Optional[Driver] = Depends(get_current_driver_optional),
     db: Session = Depends(get_db),
 ):
+    if current_driver:
+        _require_driver_approved(current_driver)
     resolved_driver_id = current_driver.id if current_driver else req.driver_id
     if not resolved_driver_id or not crud.get_driver(db, int(resolved_driver_id)):
         raise HTTPException(status_code=401, detail="Unauthorized")
@@ -991,18 +1352,30 @@ def api_driver_score(driver_id: int, db: Session = Depends(get_db)):
     )
 
 
+@app.get("/")
+def landing_page():
+    file_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "index.html")
+    return FileResponse(file_path)
+
+
+@app.get("/app")
+def app_page():
+    file_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "app.html")
+    return FileResponse(file_path)
+
+
 @app.get("/operator")
 def operator_page():
-    index_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "index.html")
-    return FileResponse(index_file)
+    file_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "app.html")
+    return FileResponse(file_path)
 
 
 @app.get("/school")
 def school_page():
-    index_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "index.html")
-    return FileResponse(index_file)
+    file_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "app.html")
+    return FileResponse(file_path)
 
 
 frontend_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend")
 if os.path.isdir(frontend_dir):
-    app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="frontend")
+    app.mount("/", StaticFiles(directory=frontend_dir, html=False), name="frontend")

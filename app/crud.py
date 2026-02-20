@@ -45,6 +45,8 @@ def get_or_create_driver_by_phone(
     email: Optional[str] = None,
     name: Optional[str] = None,
     role: Optional[str] = "taxi",
+    group_tag: Optional[str] = None,
+    organization_id: Optional[int] = None,
 ) -> models.Driver:
     driver = get_driver_by_phone(db, phone)
     if driver:
@@ -56,6 +58,10 @@ def get_or_create_driver_by_phone(
             driver.role = role
         if email:
             driver.email = email
+        if group_tag:
+            driver.group_tag = group_tag
+        if organization_id is not None:
+            driver.organization_id = organization_id
         db.commit()
         db.refresh(driver)
         return driver
@@ -66,6 +72,9 @@ def get_or_create_driver_by_phone(
         name=name,
         role=role or "taxi",
         created_at=datetime.utcnow(),
+        group_tag=group_tag,
+        approved=False,
+        organization_id=organization_id,
     )
     db.add(driver)
     db.commit()
@@ -227,6 +236,9 @@ def create_voice_message(
         note=note,
         status=status,
         created_at=datetime.utcnow(),
+        group_tag=group_tag,
+        approved=False,
+        organization_id=organization_id,
     )
     db.add(msg)
     db.commit()
@@ -366,3 +378,20 @@ def is_token_revoked(db: Session, token: str) -> bool:
     if not token:
         return False
     return db.query(models.RevokedToken).filter(models.RevokedToken.token == token).first() is not None
+
+
+def list_organizations(db: Session, org_type: Optional[str] = None, status: Optional[str] = "active") -> List[models.Organization]:
+    q = db.query(models.Organization)
+    if org_type:
+        q = q.filter(models.Organization.type == org_type)
+    if status:
+        q = q.filter(models.Organization.status == status)
+    return q.order_by(models.Organization.name.asc()).all()
+
+
+def get_organization(db: Session, organization_id: int) -> Optional[models.Organization]:
+    return db.query(models.Organization).filter(models.Organization.id == organization_id).first()
+
+
+def get_org_member(db: Session, organization_id: int, driver_id: int) -> Optional[models.OrganizationMember]:
+    return db.query(models.OrganizationMember).filter(models.OrganizationMember.organization_id == organization_id, models.OrganizationMember.driver_id == driver_id).first()
