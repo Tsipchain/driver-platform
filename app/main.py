@@ -32,6 +32,16 @@ def get_db():
         db.close()
 
 
+ORG_TYPES = {"taxi", "school", "transport", "drone"}
+
+
+def _normalize_org_type(value: Optional[str]) -> str:
+    t = (value or "taxi").strip().lower()
+    if t not in ORG_TYPES:
+        raise HTTPException(status_code=400, detail="Invalid organization type")
+    return t
+
+
 def normalize_phone(phone: str) -> str:
     cleaned = re.sub(r"[^\d+]", "", phone or "")
     if cleaned.startswith("00"):
@@ -409,10 +419,10 @@ PLANS_MATRIX = {
         "features": ["trips", "telemetry_manual", "telemetry_auto_gps", "operator_map_basic", "otp_login", "voice_send_only"],
     },
     "pro": {
-        "features": ["trips", "telemetry_manual", "telemetry_auto_gps", "operator_map_basic", "voice_send_only", "voice_reply", "events_filters", "exports_pdf", "white_label_branding", "retention_12m"],
+        "features": ["trips", "telemetry_manual", "telemetry_auto_gps", "operator_map_basic", "voice_send_only", "voice_reply", "events_filters", "exports_pdf", "white_label_branding", "retention_12m", "marketplace_global"],
     },
     "enterprise": {
-        "features": ["trips", "telemetry_manual", "telemetry_auto_gps", "operator_map_basic", "voice_send_only", "voice_reply", "events_filters", "exports_pdf", "white_label_branding", "retention_12m", "multi_org", "custom_domain", "rewards_module"],
+        "features": ["trips", "telemetry_manual", "telemetry_auto_gps", "operator_map_basic", "voice_send_only", "voice_reply", "events_filters", "exports_pdf", "white_label_branding", "retention_12m", "multi_org", "custom_domain", "rewards_module", "marketplace_global"],
     },
 }
 
@@ -867,7 +877,11 @@ def api_create_trial(req: schemas.TrialCreateRequest, request: Request, db: Sess
         row = models.Organization(
             name=company_name,
             slug=slug,
+<<<<<<< codex/add-logging-for-email-sending-status-eei6dq
+            type=_normalize_org_type(req.type),
+=======
             type=req.type,
+>>>>>>> main
             status="active",
             default_group_tag=f"{slug}-a",
             title=company_name,
@@ -937,7 +951,11 @@ def api_organization_request(req: schemas.OrganizationRequestCreate, db: Session
         slug=slug,
         city=(req.city or "").strip() or None,
         contact_email=(req.contact_email or "").strip() or None,
+<<<<<<< codex/add-logging-for-email-sending-status-eei6dq
+        type=_normalize_org_type(req.type),
+=======
         type=req.type or "taxi",
+>>>>>>> main
         status="pending",
         created_at=datetime.utcnow(),
     )
@@ -962,7 +980,11 @@ def api_organization_approve(
         row = models.Organization(
             name=req.name,
             slug=req.slug,
+<<<<<<< codex/add-logging-for-email-sending-status-eei6dq
+            type=_normalize_org_type(req.type),
+=======
             type=req.type,
+>>>>>>> main
             status="active",
             default_group_tag=req.slug + "-a",
             title=req.name,
@@ -1383,6 +1405,185 @@ def api_voice_download(
     raise HTTPException(status_code=401, detail="Unauthorized")
 
 
+@app.get("/api/orgs/{slug}/assignments", response_model=List[schemas.AssignmentRead])
+def api_org_assignments(
+    slug: str,
+    current_driver: Driver = Depends(get_current_driver),
+    db: Session = Depends(get_db),
+):
+    org = db.query(models.Organization).filter(models.Organization.slug == slug).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    if current_driver.organization_id and current_driver.organization_id != org.id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    rows = (
+        db.query(models.Assignment)
+        .filter(models.Assignment.organization_id == org.id)
+        .order_by(models.Assignment.created_at.desc())
+        .all()
+    )
+    return rows
+
+
+@app.post("/api/operator/assignments", response_model=schemas.AssignmentRead)
+def api_operator_create_assignment(
+    req: schemas.AssignmentCreateRequest,
+    x_admin_token: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    _, forced_org = _resolve_operator_scope(db, x_admin_token)
+    if forced_org and req.organization_id != forced_org:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    org = crud.get_organization(db, req.organization_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    row = models.Assignment(
+        organization_id=req.organization_id,
+        depart_at=req.depart_at,
+        origin_country=req.origin_country,
+        origin_region=req.origin_region,
+        origin_city=req.origin_city,
+        dest_country=req.dest_country,
+        dest_region=req.dest_region,
+        dest_city=req.dest_city,
+        notes=req.notes,
+        status="open",
+        created_at=datetime.utcnow(),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@app.post("/api/driver/assignments/{assignment_id}/claim", response_model=schemas.AssignmentClaimRead)
+def api_driver_claim_assignment(
+    assignment_id: int,
+    current_driver: Driver = Depends(get_current_driver),
+    db: Session = Depends(get_db),
+):
+    _require_driver_approved(current_driver)
+    assignment = db.query(models.Assignment).filter(models.Assignment.id == assignment_id).first()
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+    if current_driver.organization_id and assignment.organization_id != current_driver.organization_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    existing = (
+        db.query(models.AssignmentClaim)
+        .filter(models.AssignmentClaim.assignment_id == assignment_id, models.AssignmentClaim.driver_id == current_driver.id)
+        .first()
+    )
+    if existing:
+        return existing
+    claim = models.AssignmentClaim(
+        assignment_id=assignment_id,
+        driver_id=current_driver.id,
+        status="pending",
+        created_at=datetime.utcnow(),
+    )
+    assignment.status = "claimed"
+    db.add(claim)
+    db.commit()
+    db.refresh(claim)
+    return claim
+
+
+@app.post("/api/operator/claims/{claim_id}/approve", response_model=schemas.AssignmentClaimRead)
+def api_operator_approve_claim(
+    claim_id: int,
+    x_admin_token: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    _, forced_org = _resolve_operator_scope(db, x_admin_token)
+    claim = db.query(models.AssignmentClaim).filter(models.AssignmentClaim.id == claim_id).first()
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found")
+    assignment = db.query(models.Assignment).filter(models.Assignment.id == claim.assignment_id).first()
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+    if forced_org and assignment.organization_id != forced_org:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    claim.status = "approved"
+    claim.approved_at = datetime.utcnow()
+    assignment.status = "approved"
+    db.commit()
+    db.refresh(claim)
+    return claim
+
+
+@app.get("/api/operator/claims/pending")
+def api_operator_pending_claims(
+    x_admin_token: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    _, forced_org = _resolve_operator_scope(db, x_admin_token)
+    q = db.query(models.AssignmentClaim, models.Assignment).join(models.Assignment, models.Assignment.id == models.AssignmentClaim.assignment_id)
+    q = q.filter(models.AssignmentClaim.status == "pending")
+    if forced_org:
+        q = q.filter(models.Assignment.organization_id == forced_org)
+    rows = q.order_by(models.AssignmentClaim.created_at.desc()).all()
+    return {"items": [{"claim_id": c.id, "assignment_id": a.id, "driver_id": c.driver_id, "status": c.status, "created_at": c.created_at} for c, a in rows]}
+
+
+@app.get("/api/marketplace/drivers", response_model=List[schemas.DriverRead])
+def api_marketplace_drivers(
+    country: Optional[str] = None,
+    region: Optional[str] = None,
+    city: Optional[str] = None,
+    current_driver: Driver = Depends(get_current_driver),
+    db: Session = Depends(get_db),
+):
+    org = crud.get_organization(db, current_driver.organization_id) if current_driver.organization_id else None
+    global_enabled = is_feature_enabled(org, "marketplace_global")
+
+    q = db.query(models.Driver).filter(models.Driver.marketplace_opt_in == True, models.Driver.approved == True)
+    if country:
+        q = q.filter(models.Driver.country_code == country)
+    if region:
+        q = q.filter(models.Driver.region_code == region)
+    if city:
+        q = q.filter(models.Driver.city == city)
+
+    if not global_enabled:
+        # For non-global plans restrict to requester's local area.
+        q = q.filter(
+            models.Driver.country_code == (current_driver.country_code or ""),
+            models.Driver.region_code == (current_driver.region_code or ""),
+            models.Driver.city == (current_driver.city or ""),
+        )
+
+    return q.order_by(models.Driver.rating_avg.desc().nullslast(), models.Driver.rating_count.desc()).limit(200).all()
+
+
+@app.post("/api/operator/rewards/grant", response_model=schemas.RewardEventRead)
+def api_operator_rewards_grant(
+    req: schemas.RewardGrantRequest,
+    x_admin_token: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    _, forced_org = _resolve_operator_scope(db, x_admin_token)
+    if not forced_org:
+        raise HTTPException(status_code=400, detail="Organization-scoped operator token required")
+    drv = crud.get_driver(db, req.driver_id)
+    if not drv:
+        raise HTTPException(status_code=404, detail="Driver not found")
+    if drv.organization_id != forced_org:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    row = models.RewardEvent(
+        organization_id=forced_org,
+        driver_id=req.driver_id,
+        token_symbol=req.token_symbol,
+        amount=req.amount,
+        reason=req.reason,
+        status="queued",
+        created_at=datetime.utcnow(),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
 
 app.include_router(auth_router)
 
@@ -1409,6 +1610,25 @@ def api_start_trip(
     resolved_driver_id = current_driver.id if current_driver else req.driver_id
     if not resolved_driver_id or not crud.get_driver(db, int(resolved_driver_id)):
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+    if req.assignment_id is not None:
+        assignment = db.query(models.Assignment).filter(models.Assignment.id == req.assignment_id).first()
+        if not assignment:
+            raise HTTPException(status_code=404, detail="Assignment not found")
+        claim = (
+            db.query(models.AssignmentClaim)
+            .filter(
+                models.AssignmentClaim.assignment_id == req.assignment_id,
+                models.AssignmentClaim.driver_id == int(resolved_driver_id),
+                models.AssignmentClaim.status == "approved",
+            )
+            .first()
+        )
+        if not claim:
+            raise HTTPException(status_code=403, detail="Assignment claim not approved")
+        assignment.status = "in_progress"
+        db.commit()
+
     return crud.start_trip(db, req, driver_id=int(resolved_driver_id))
 
 

@@ -100,7 +100,7 @@ def touch_session(db: Session, session: models.SessionToken) -> None:
 
 
 def start_trip(db: Session, req: schemas.TripStartRequest, driver_id: int) -> models.Trip:
-    trip = models.Trip(driver_id=driver_id, origin=req.origin, destination=req.destination, notes=req.notes)
+    trip = models.Trip(driver_id=driver_id, origin=req.origin, destination=req.destination, notes=req.notes, assignment_id=req.assignment_id)
     db.add(trip)
     db.commit()
     db.refresh(trip)

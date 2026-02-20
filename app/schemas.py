@@ -15,6 +15,15 @@ class DriverBase(BaseModel):
     company_name: Optional[str] = None
     group_tag: Optional[str] = None
     organization_id: Optional[int] = None
+<<<<<<< codex/add-logging-for-email-sending-status-eei6dq
+    country_code: Optional[str] = None
+    region_code: Optional[str] = None
+    city: Optional[str] = None
+    rating_avg: Optional[float] = None
+    rating_count: int = 0
+    marketplace_opt_in: bool = False
+=======
+>>>>>>> main
 
 
 class DriverCreate(DriverBase):
@@ -42,6 +51,7 @@ class TripBase(BaseModel):
 
 class TripStartRequest(TripBase):
     driver_id: Optional[int] = None
+    assignment_id: Optional[int] = None
 
 
 class TripFinishRequest(BaseModel):
@@ -56,6 +66,7 @@ class TripFinishRequest(BaseModel):
 class TripRead(TripBase):
     id: int
     driver_id: int
+    assignment_id: Optional[int] = None
     started_at: datetime
     finished_at: Optional[datetime] = None
     distance_km: Optional[float] = None
@@ -123,6 +134,15 @@ class AuthRequestCode(BaseModel):
     role: Optional[str] = "taxi"
     group_tag: Optional[str] = None
     organization_id: Optional[int] = None
+<<<<<<< codex/add-logging-for-email-sending-status-eei6dq
+    country_code: Optional[str] = None
+    region_code: Optional[str] = None
+    city: Optional[str] = None
+    rating_avg: Optional[float] = None
+    rating_count: int = 0
+    marketplace_opt_in: bool = False
+=======
+>>>>>>> main
 
 
 class AuthVerifyCode(BaseModel):
@@ -178,7 +198,11 @@ class OrganizationRequestCreate(BaseModel):
     name: str
     city: Optional[str] = None
     contact_email: Optional[str] = None
+<<<<<<< codex/add-logging-for-email-sending-status-eei6dq
+    type: str = "taxi"  # taxi|school|transport|drone
+=======
     type: str = "taxi"
+>>>>>>> main
 
 
 class OrganizationJoinRequest(BaseModel):
@@ -202,3 +226,69 @@ class TrialCreateRequest(BaseModel):
             values["company_name"] = legacy_name
         return values
 
+<<<<<<< codex/add-logging-for-email-sending-status-eei6dq
+
+
+class AssignmentCreateRequest(BaseModel):
+    organization_id: int
+    depart_at: Optional[datetime] = None
+    origin_country: Optional[str] = None
+    origin_region: Optional[str] = None
+    origin_city: Optional[str] = None
+    dest_country: Optional[str] = None
+    dest_region: Optional[str] = None
+    dest_city: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class AssignmentRead(BaseModel):
+    id: int
+    organization_id: int
+    depart_at: Optional[datetime] = None
+    origin_country: Optional[str] = None
+    origin_region: Optional[str] = None
+    origin_city: Optional[str] = None
+    dest_country: Optional[str] = None
+    dest_region: Optional[str] = None
+    dest_city: Optional[str] = None
+    notes: Optional[str] = None
+    status: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AssignmentClaimRead(BaseModel):
+    id: int
+    assignment_id: int
+    driver_id: int
+    status: str
+    created_at: datetime
+    approved_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class RewardGrantRequest(BaseModel):
+    driver_id: int
+    token_symbol: str
+    amount: float
+    reason: str
+
+
+class RewardEventRead(BaseModel):
+    id: int
+    organization_id: int
+    driver_id: int
+    token_symbol: str
+    amount: float
+    reason: str
+    status: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+=======
+>>>>>>> main

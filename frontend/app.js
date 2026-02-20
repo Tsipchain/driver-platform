@@ -64,10 +64,17 @@ async function loadOrganizations() {
     const resp = await fetch(`${API_BASE}/api/organizations?status=active`);
     if (!resp.ok) return;
     const items = await resp.json();
+<<<<<<< codex/add-logging-for-email-sending-status-eei6dq
+    sel.innerHTML = '<option value="">— Ελεύθερος επαγγελματίας —</option>' + (items || []).map(o => { const label = (o.type === "transport" ? "Μεταφορική" : (o.type === "school" ? "Σχολή" : (o.type === "drone" ? "Drone" : "Taxi"))); return `<option value="${o.id}" data-group="${o.default_group_tag || ""}" data-type="${o.type || "taxi"}">${o.name} (${label})</option>`; }).join('');
+    const opSel = $("operatorOrgSelect");
+    if (opSel) {
+      opSel.innerHTML = '<option value="">Επιλογή οργανισμού</option>' + (items || []).map(o => { const label = (o.type === "transport" ? "Μεταφορική" : (o.type === "school" ? "Σχολή" : (o.type === "drone" ? "Drone" : "Taxi"))); return `<option value="${o.id}" data-group="${o.default_group_tag || ""}">${o.name} (${label})</option>`; }).join('');
+=======
     sel.innerHTML = '<option value="">— Ελεύθερος επαγγελματίας —</option>' + (items || []).map(o => `<option value="${o.id}" data-group="${o.default_group_tag || ""}">${o.name}</option>`).join('');
     const opSel = $("operatorOrgSelect");
     if (opSel) {
       opSel.innerHTML = '<option value="">Επιλογή οργανισμού</option>' + (items || []).map(o => `<option value="${o.id}" data-group="${o.default_group_tag || ""}">${o.name}</option>`).join('');
+>>>>>>> main
     }
   } catch (_) {}
 }
@@ -87,7 +94,11 @@ async function submitOrganizationRequest() {
     name: $("orgReqName")?.value.trim(),
     city: $("orgReqCity")?.value.trim() || null,
     contact_email: $("orgReqEmail")?.value.trim() || null,
+<<<<<<< codex/add-logging-for-email-sending-status-eei6dq
+    type: $("orgReqType")?.value || "taxi",
+=======
     type: "taxi",
+>>>>>>> main
   };
   const resp = await fetch(`${API_BASE}/api/organizations/request`, {
     method: "POST",
@@ -223,7 +234,11 @@ async function requestCode() {
     phone: $("loginPhone").value.trim(),
     email: $("loginEmail").value.trim() || null,
     name: $("loginName").value.trim() || null,
+<<<<<<< codex/add-logging-for-email-sending-status-eei6dq
+    role: $("loginOrganization")?.selectedOptions?.[0]?.getAttribute("data-type") || "taxi",
+=======
     role: "taxi",
+>>>>>>> main
     organization_id: $("loginOrganization")?.value ? Number($("loginOrganization").value) : null,
   };
 
@@ -582,6 +597,26 @@ async function loadPendingDrivers() {
   });
 }
 
+<<<<<<< codex/add-logging-for-email-sending-status-eei6dq
+
+
+async function loadPendingClaims() {
+  const token = getOperatorToken();
+  const resp = await fetch(`${API_BASE}/api/operator/claims/pending`, { headers: { "X-Admin-Token": token } });
+  if (!resp.ok) return;
+  const data = await resp.json();
+  const host = $("operatorClaimsList");
+  if (!host) return;
+  host.innerHTML = (data.items || []).map(i => `<div style="margin:8px 0;">claim #${i.claim_id} assignment #${i.assignment_id} driver ${i.driver_id} <button class="outline" data-claim="${i.claim_id}">Approve</button></div>`).join("") || "No pending claims";
+  host.querySelectorAll("button[data-claim]").forEach((btn) => btn.onclick = async () => {
+    const id = btn.getAttribute("data-claim");
+    const r = await fetch(`${API_BASE}/api/operator/claims/${id}/approve`, { method: "POST", headers: { "X-Admin-Token": token } });
+    if (r.ok) await loadPendingClaims();
+  });
+}
+
+=======
+>>>>>>> main
 window.addEventListener("DOMContentLoaded", () => {
   renderAuthState();
   updateRequestCodeButton();
@@ -595,7 +630,11 @@ window.addEventListener("DOMContentLoaded", () => {
     $("btnOperatorLogin")?.addEventListener("click", openOperatorLoginModal);
     $("btnCloseOperatorLogin")?.addEventListener("click", closeOperatorLoginModal);
     $("btnSubmitOperatorLogin")?.addEventListener("click", submitOperatorLogin);
+<<<<<<< codex/add-logging-for-email-sending-status-eei6dq
+    $("btnLoadOperator")?.addEventListener("click", async () => { await loadOperatorDashboard(); await loadOperatorVoice(); await loadPendingDrivers(); await loadPendingClaims(); });
+=======
     $("btnLoadOperator")?.addEventListener("click", async () => { await loadOperatorDashboard(); await loadOperatorVoice(); await loadPendingDrivers(); });
+>>>>>>> main
     initOperatorMap();
     applyBranding();
     return;

@@ -32,6 +32,12 @@ class Driver(Base):
     group_tag = Column(String(64), nullable=True, index=True)
     organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
     approved = Column(Boolean, nullable=False, default=False)
+    country_code = Column(String(8), nullable=True, index=True)
+    region_code = Column(String(32), nullable=True, index=True)
+    city = Column(String(128), nullable=True, index=True)
+    rating_avg = Column(Float, nullable=True)
+    rating_count = Column(Integer, nullable=False, default=0)
+    marketplace_opt_in = Column(Boolean, nullable=False, default=False, index=True)
 
     trips = relationship("Trip", back_populates="driver", cascade="all, delete-orphan")
     telemetry_events = relationship("TelemetryEvent", back_populates="driver", cascade="all, delete-orphan")
@@ -67,6 +73,7 @@ class Trip(Base):
     company_name = Column(String(128), nullable=True)
     group_tag = Column(String(64), nullable=True, index=True)
     organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
+    assignment_id = Column(Integer, ForeignKey("assignments.id"), nullable=True, index=True)
     reward_points = Column(Float, nullable=True)
 
     driver = relationship("Driver", back_populates="trips")
@@ -228,6 +235,47 @@ class OperatorToken(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     last_used_at = Column(DateTime, nullable=True)
     expires_at = Column(DateTime, nullable=True)
+
+
+class Assignment(Base):
+    __tablename__ = "assignments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    depart_at = Column(DateTime, nullable=True)
+    origin_country = Column(String(8), nullable=True)
+    origin_region = Column(String(32), nullable=True)
+    origin_city = Column(String(128), nullable=True)
+    dest_country = Column(String(8), nullable=True)
+    dest_region = Column(String(32), nullable=True)
+    dest_city = Column(String(128), nullable=True)
+    notes = Column(Text, nullable=True)
+    status = Column(String(32), nullable=False, default="open", index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class AssignmentClaim(Base):
+    __tablename__ = "assignment_claims"
+
+    id = Column(Integer, primary_key=True, index=True)
+    assignment_id = Column(Integer, ForeignKey("assignments.id"), nullable=False, index=True)
+    driver_id = Column(Integer, ForeignKey("drivers.id"), nullable=False, index=True)
+    status = Column(String(32), nullable=False, default="pending", index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    approved_at = Column(DateTime, nullable=True)
+
+
+class RewardEvent(Base):
+    __tablename__ = "reward_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    driver_id = Column(Integer, ForeignKey("drivers.id"), nullable=False, index=True)
+    token_symbol = Column(String(32), nullable=False)
+    amount = Column(Float, nullable=False)
+    reason = Column(String(64), nullable=False)
+    status = Column(String(32), nullable=False, default="queued", index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class TrialAttempt(Base):
