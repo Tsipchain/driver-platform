@@ -802,7 +802,7 @@ def api_plans():
 @app.post("/api/trials/create", status_code=201)
 def api_create_trial(req: schemas.TrialCreateRequest, request: Request, db: Session = Depends(get_db)):
     now = datetime.utcnow()
-    company_name = (req.company_name or "").strip()
+    company_name = (req.company_name or req.name or "").strip()
     contact_email = (req.contact_email or "").strip().lower()
     phone = (req.phone or "").strip() or None
     phone_norm = re.sub(r"\s+", "", phone) if phone else None

@@ -101,7 +101,7 @@ def _run_sqlite_migrations() -> None:
         conn.execute(text("CREATE TABLE IF NOT EXISTS certifications (id INTEGER PRIMARY KEY, driver_id INTEGER NOT NULL, cert_type TEXT NOT NULL, cert_ref TEXT NULL, issued_at DATETIME NOT NULL, FOREIGN KEY(driver_id) REFERENCES drivers(id))"))
         conn.execute(text("CREATE TABLE IF NOT EXISTS tenant_branding (id INTEGER PRIMARY KEY, group_tag TEXT NOT NULL UNIQUE, app_name TEXT NULL, logo_url TEXT NULL, favicon_url TEXT NULL, primary_color TEXT NULL, plan TEXT NOT NULL DEFAULT 'basic', updated_at DATETIME NOT NULL)"))
         conn.execute(text("CREATE TABLE IF NOT EXISTS operator_tokens (id INTEGER PRIMARY KEY, group_tag TEXT NULL, organization_id INTEGER NULL, token_hash TEXT NOT NULL UNIQUE, role TEXT NOT NULL, created_at DATETIME NOT NULL, last_used_at DATETIME NULL, expires_at DATETIME NULL)"))
-        conn.execute(text("CREATE TABLE IF NOT EXISTS organizations (id INTEGER PRIMARY KEY, name TEXT NOT NULL, slug TEXT NULL, type TEXT NOT NULL DEFAULT 'taxi', status TEXT NOT NULL DEFAULT 'pending', default_group_tag TEXT NULL, title TEXT NULL, logo_url TEXT NULL, favicon_url TEXT NULL, token_symbol TEXT NULL, treasury_wallet TEXT NULL, reward_policy_json TEXT NULL, plan TEXT NOT NULL DEFAULT 'basic', plan_status TEXT NOT NULL DEFAULT 'trialing', trial_ends_at DATETIME NULL, addons_json TEXT NULL, billing_name TEXT NULL, billing_email TEXT NULL, billing_address TEXT NULL, billing_country TEXT NULL, created_at DATETIME NOT NULL)"))
+        conn.execute(text("CREATE TABLE IF NOT EXISTS organizations (id INTEGER PRIMARY KEY, name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE, type TEXT NOT NULL DEFAULT 'taxi', status TEXT NOT NULL DEFAULT 'pending', default_group_tag TEXT NULL, title TEXT NULL, logo_url TEXT NULL, favicon_url TEXT NULL, token_symbol TEXT NULL, treasury_wallet TEXT NULL, reward_policy_json TEXT NULL, plan TEXT NOT NULL DEFAULT 'basic', plan_status TEXT NOT NULL DEFAULT 'trialing', trial_ends_at DATETIME NULL, addons_json TEXT NULL, billing_name TEXT NULL, billing_email TEXT NULL, billing_address TEXT NULL, billing_country TEXT NULL, created_at DATETIME NOT NULL)"))
         conn.execute(text("CREATE TABLE IF NOT EXISTS organization_members (id INTEGER PRIMARY KEY, organization_id INTEGER NOT NULL, driver_id INTEGER NOT NULL, role TEXT NOT NULL DEFAULT 'driver', approved INTEGER NOT NULL DEFAULT 0, created_at DATETIME NOT NULL, FOREIGN KEY(organization_id) REFERENCES organizations(id), FOREIGN KEY(driver_id) REFERENCES drivers(id))"))
         conn.execute(text("CREATE TABLE IF NOT EXISTS organization_requests (id INTEGER PRIMARY KEY, name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE, city TEXT NULL, contact_email TEXT NULL, type TEXT NOT NULL DEFAULT 'taxi', status TEXT NOT NULL DEFAULT 'pending', created_at DATETIME NOT NULL)"))
         conn.execute(text("CREATE TABLE IF NOT EXISTS trial_attempts (id INTEGER PRIMARY KEY, created_at DATETIME NOT NULL, ip_hash TEXT NOT NULL, email_hash TEXT NOT NULL, phone_hash TEXT NULL, status TEXT NOT NULL, retry_after INTEGER NULL, organization_id INTEGER NULL, error_code TEXT NULL)"))
@@ -186,6 +186,8 @@ def _run_sqlite_migrations() -> None:
             "in_reply_to": "ALTER TABLE voice_messages ADD COLUMN in_reply_to INTEGER",
             "read_at": "ALTER TABLE voice_messages ADD COLUMN read_at DATETIME",
             "group_tag": "ALTER TABLE voice_messages ADD COLUMN group_tag TEXT",
+            "organization_id": "ALTER TABLE voice_messages ADD COLUMN organization_id INTEGER",
+            "approved": "ALTER TABLE voice_messages ADD COLUMN approved INTEGER NOT NULL DEFAULT 0",
         }.items():
             if col not in voice_columns:
                 conn.execute(text(ddl))
@@ -215,6 +217,7 @@ def _run_sqlite_migrations() -> None:
             "CREATE INDEX IF NOT EXISTS idx_trial_attempts_phone_created ON trial_attempts(phone_hash, created_at)",
             "CREATE INDEX IF NOT EXISTS idx_trial_attempts_ip_email_created ON trial_attempts(ip_hash, email_hash, created_at)",
             "CREATE INDEX IF NOT EXISTS idx_voice_messages_group_tag ON voice_messages(group_tag)",
+            "CREATE INDEX IF NOT EXISTS idx_voice_messages_organization_id ON voice_messages(organization_id)",
             "CREATE INDEX IF NOT EXISTS idx_voice_messages_driver_id ON voice_messages(driver_id)",
             "CREATE INDEX IF NOT EXISTS idx_voice_messages_created_at ON voice_messages(created_at)",
             "CREATE INDEX IF NOT EXISTS idx_payment_events_org_created ON payment_events(organization_id, created_at)",

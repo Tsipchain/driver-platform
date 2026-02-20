@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, root_validator
 
 
 class DriverBase(BaseModel):
@@ -188,7 +188,17 @@ class OrganizationJoinRequest(BaseModel):
 
 class TrialCreateRequest(BaseModel):
     company_name: str
-    type: str = "taxi"
+    name: Optional[str] = None  # legacy alias
     contact_email: str
     phone: Optional[str] = None
+    type: str = "taxi"
+
+    @root_validator(pre=True)
+    def _legacy_name_alias(cls, values):
+        if values.get("company_name"):
+            return values
+        legacy_name = values.get("name")
+        if legacy_name:
+            values["company_name"] = legacy_name
+        return values
 
