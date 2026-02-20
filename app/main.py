@@ -877,11 +877,7 @@ def api_create_trial(req: schemas.TrialCreateRequest, request: Request, db: Sess
         row = models.Organization(
             name=company_name,
             slug=slug,
-<<<<<<< codex/add-logging-for-email-sending-status-eei6dq
             type=_normalize_org_type(req.type),
-=======
-            type=req.type,
->>>>>>> main
             status="active",
             default_group_tag=f"{slug}-a",
             title=company_name,
@@ -951,11 +947,7 @@ def api_organization_request(req: schemas.OrganizationRequestCreate, db: Session
         slug=slug,
         city=(req.city or "").strip() or None,
         contact_email=(req.contact_email or "").strip() or None,
-<<<<<<< codex/add-logging-for-email-sending-status-eei6dq
         type=_normalize_org_type(req.type),
-=======
-        type=req.type or "taxi",
->>>>>>> main
         status="pending",
         created_at=datetime.utcnow(),
     )
@@ -980,11 +972,7 @@ def api_organization_approve(
         row = models.Organization(
             name=req.name,
             slug=req.slug,
-<<<<<<< codex/add-logging-for-email-sending-status-eei6dq
             type=_normalize_org_type(req.type),
-=======
-            type=req.type,
->>>>>>> main
             status="active",
             default_group_tag=req.slug + "-a",
             title=req.name,
@@ -1719,6 +1707,24 @@ def api_driver_score(driver_id: int, db: Session = Depends(get_db)):
         avg_speed_kmh=avg_speed,
         score_0_100=score,
     )
+
+
+@app.get("/terms")
+def terms_page():
+    file_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "terms.html")
+    return FileResponse(file_path)
+
+
+@app.get("/privacy")
+def privacy_page():
+    file_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "privacy.html")
+    return FileResponse(file_path)
+
+
+@app.get("/refund")
+def refund_page():
+    file_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "refund.html")
+    return FileResponse(file_path)
 
 
 @app.get("/")
