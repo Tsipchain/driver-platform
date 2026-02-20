@@ -169,6 +169,14 @@ class Organization(Base):
     token_symbol = Column(String(32), nullable=True)
     treasury_wallet = Column(String(255), nullable=True)
     reward_policy_json = Column(Text, nullable=True)
+    plan = Column(String(32), nullable=False, default="basic")
+    plan_status = Column(String(32), nullable=False, default="trialing")
+    trial_ends_at = Column(DateTime, nullable=True)
+    addons_json = Column(Text, nullable=True)
+    billing_name = Column(String(128), nullable=True)
+    billing_email = Column(String(255), nullable=True)
+    billing_address = Column(Text, nullable=True)
+    billing_country = Column(String(64), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
@@ -220,3 +228,34 @@ class OperatorToken(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     last_used_at = Column(DateTime, nullable=True)
     expires_at = Column(DateTime, nullable=True)
+
+
+class TrialAttempt(Base):
+    __tablename__ = "trial_attempts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    ip_hash = Column(String(128), nullable=False, index=True)
+    email_hash = Column(String(128), nullable=False, index=True)
+    phone_hash = Column(String(128), nullable=True, index=True)
+    status = Column(String(32), nullable=False)
+    retry_after = Column(Integer, nullable=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
+    error_code = Column(String(64), nullable=True)
+
+
+class PaymentEvent(Base):
+    __tablename__ = "payment_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    provider = Column(String(32), nullable=False)
+    provider_event_id = Column(String(128), nullable=False, index=True)
+    amount = Column(Float, nullable=False)
+    currency = Column(String(16), nullable=False)
+    status = Column(String(32), nullable=False)
+    thronos_tx_id = Column(String(128), nullable=True)
+    block_height = Column(Integer, nullable=True)
+    confirmations = Column(Integer, nullable=False, default=0)
+

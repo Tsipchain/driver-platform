@@ -46,10 +46,65 @@ def normalize_phone(phone: str) -> str:
 
 
 
-def slugify_text(value: str) -> str:
-    base = re.sub(r"[^a-z0-9]+", "-", (value or "").strip().lower())
-    base = re.sub(r"-+", "-", base).strip("-")
-    return base or f"org-{secrets.token_hex(3)}"
+def make_slug(name: str) -> str:
+    value = (name or "").strip().lower().replace("_", " ")
+    value = re.sub(r"\s+", "-", value)
+    value = re.sub(r"[^a-z0-9-]", "", value)
+    value = re.sub(r"-+", "-", value).strip("-")
+    value = value[:40].rstrip("-")
+    return value or "org"
+
+
+def make_unique_slug(db: Session, base_slug_or_name: str) -> str:
+    base = make_slug(base_slug_or_name)
+    slug = base
+    n = 1
+    while db.query(models.Organization).filter(models.Organization.slug == slug).first() is not None:
+        n += 1
+        suffix = f"-{n}"
+        slug = f"{base[: max(1, 40 - len(suffix))]}{suffix}"
+    return slug
+
+
+def get_client_ip(request: Request) -> str:
+    xff = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    if xff:
+        return xff
+    return request.client.host if request.client else "unknown"
+
+
+def _trial_hash_salt() -> str:
+    return (os.getenv("TRIAL_HASH_SALT") or "").strip()
+
+
+def _sha(value: Optional[str]) -> str:
+    val = (value or "").strip()
+    return hashlib.sha256(f"{_trial_hash_salt()}|{val}".encode("utf-8")).hexdigest()
+
+
+def _trial_limits() -> dict:
+    return {
+        "short": int(os.getenv("TRIAL_RL_WINDOW_SHORT_SEC", "900")),
+        "long": int(os.getenv("TRIAL_RL_WINDOW_LONG_SEC", "86400")),
+        "ip_short": int(os.getenv("TRIAL_RL_MAX_IP_SHORT", "5")),
+        "email_short": int(os.getenv("TRIAL_RL_MAX_EMAIL_SHORT", "3")),
+        "ip_email_short": int(os.getenv("TRIAL_RL_MAX_IP_EMAIL_SHORT", "2")),
+        "phone_short": int(os.getenv("TRIAL_RL_MAX_PHONE_SHORT", "2")),
+        "ip_long": int(os.getenv("TRIAL_RL_MAX_IP_LONG", "25")),
+        "email_long": int(os.getenv("TRIAL_RL_MAX_EMAIL_LONG", "6")),
+        "phone_long": int(os.getenv("TRIAL_RL_MAX_PHONE_LONG", "6")),
+    }
+
+
+def enqueue_thronos_receipt(org_id: int, provider_event_id: str, amount: float, currency: str) -> dict:
+    return {
+        "queued": True,
+        "organization_id": org_id,
+        "provider_event_id": provider_event_id,
+        "amount": amount,
+        "currency": currency,
+    }
+
 
 def mask_value(email: Optional[str], phone: str) -> str:
     if email:
@@ -779,7 +834,7 @@ def api_list_organizations(
 
 @app.post("/api/organizations/request")
 def api_organization_request(req: schemas.OrganizationRequestCreate, db: Session = Depends(get_db)):
-    slug = slugify_text(req.name)
+    slug = make_slug(req.name)
     existing = db.query(models.OrganizationRequest).filter(models.OrganizationRequest.slug == slug).first()
     if existing:
         return {"ok": True, "id": existing.id, "status": existing.status}
