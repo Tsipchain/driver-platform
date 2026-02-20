@@ -30,6 +30,14 @@ class Driver(Base):
     notes = Column(Text, nullable=True)
     company_name = Column(String(128), nullable=True)
     group_tag = Column(String(64), nullable=True, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
+    approved = Column(Boolean, nullable=False, default=False)
+    country_code = Column(String(8), nullable=True, index=True)
+    region_code = Column(String(32), nullable=True, index=True)
+    city = Column(String(128), nullable=True, index=True)
+    rating_avg = Column(Float, nullable=True)
+    rating_count = Column(Integer, nullable=False, default=0)
+    marketplace_opt_in = Column(Boolean, nullable=False, default=False, index=True)
 
     trips = relationship("Trip", back_populates="driver", cascade="all, delete-orphan")
     telemetry_events = relationship("TelemetryEvent", back_populates="driver", cascade="all, delete-orphan")
@@ -64,6 +72,9 @@ class Trip(Base):
     notes = Column(Text, nullable=True)
     company_name = Column(String(128), nullable=True)
     group_tag = Column(String(64), nullable=True, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
+    assignment_id = Column(Integer, ForeignKey("assignments.id"), nullable=True, index=True)
+    reward_points = Column(Float, nullable=True)
 
     driver = relationship("Driver", back_populates="trips")
     telemetry_events = relationship("TelemetryEvent", back_populates="trip", cascade="all, delete-orphan")
@@ -122,6 +133,8 @@ class VoiceMessage(Base):
     in_reply_to = Column(Integer, nullable=True)
     read_at = Column(DateTime, nullable=True)
     group_tag = Column(String(64), nullable=True, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
+    approved = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     driver = relationship("Driver")
@@ -148,6 +161,56 @@ class Certification(Base):
     driver = relationship("Driver")
 
 
+class Organization(Base):
+    __tablename__ = "organizations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(128), nullable=False)
+    slug = Column(String(128), nullable=False, unique=True, index=True)
+    type = Column(String(32), nullable=False, default="taxi")
+    status = Column(String(32), nullable=False, default="pending")
+    default_group_tag = Column(String(64), nullable=True, index=True)
+    title = Column(String(128), nullable=True)
+    logo_url = Column(String(512), nullable=True)
+    favicon_url = Column(String(512), nullable=True)
+    token_symbol = Column(String(32), nullable=True)
+    treasury_wallet = Column(String(255), nullable=True)
+    reward_policy_json = Column(Text, nullable=True)
+    plan = Column(String(32), nullable=False, default="basic")
+    plan_status = Column(String(32), nullable=False, default="trialing")
+    trial_ends_at = Column(DateTime, nullable=True)
+    addons_json = Column(Text, nullable=True)
+    billing_name = Column(String(128), nullable=True)
+    billing_email = Column(String(255), nullable=True)
+    billing_address = Column(Text, nullable=True)
+    billing_country = Column(String(64), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class OrganizationMember(Base):
+    __tablename__ = "organization_members"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    driver_id = Column(Integer, ForeignKey("drivers.id"), nullable=False, index=True)
+    role = Column(String(32), nullable=False, default="driver")
+    approved = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class OrganizationRequest(Base):
+    __tablename__ = "organization_requests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(128), nullable=False)
+    slug = Column(String(128), nullable=False, unique=True, index=True)
+    city = Column(String(128), nullable=True)
+    contact_email = Column(String(255), nullable=True)
+    type = Column(String(32), nullable=False, default="taxi")
+    status = Column(String(32), nullable=False, default="pending")
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class TenantBranding(Base):
     __tablename__ = "tenant_branding"
 
@@ -165,8 +228,82 @@ class OperatorToken(Base):
     __tablename__ = "operator_tokens"
 
     id = Column(Integer, primary_key=True, index=True)
-    group_tag = Column(String(64), nullable=False, index=True)
+    group_tag = Column(String(64), nullable=True, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
     token_hash = Column(String(128), nullable=False, unique=True, index=True)
     role = Column(String(32), nullable=False, default="operator")
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     last_used_at = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime, nullable=True)
+
+
+class Assignment(Base):
+    __tablename__ = "assignments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    depart_at = Column(DateTime, nullable=True)
+    origin_country = Column(String(8), nullable=True)
+    origin_region = Column(String(32), nullable=True)
+    origin_city = Column(String(128), nullable=True)
+    dest_country = Column(String(8), nullable=True)
+    dest_region = Column(String(32), nullable=True)
+    dest_city = Column(String(128), nullable=True)
+    notes = Column(Text, nullable=True)
+    status = Column(String(32), nullable=False, default="open", index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class AssignmentClaim(Base):
+    __tablename__ = "assignment_claims"
+
+    id = Column(Integer, primary_key=True, index=True)
+    assignment_id = Column(Integer, ForeignKey("assignments.id"), nullable=False, index=True)
+    driver_id = Column(Integer, ForeignKey("drivers.id"), nullable=False, index=True)
+    status = Column(String(32), nullable=False, default="pending", index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    approved_at = Column(DateTime, nullable=True)
+
+
+class RewardEvent(Base):
+    __tablename__ = "reward_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    driver_id = Column(Integer, ForeignKey("drivers.id"), nullable=False, index=True)
+    token_symbol = Column(String(32), nullable=False)
+    amount = Column(Float, nullable=False)
+    reason = Column(String(64), nullable=False)
+    status = Column(String(32), nullable=False, default="queued", index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class TrialAttempt(Base):
+    __tablename__ = "trial_attempts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    ip_hash = Column(String(128), nullable=False, index=True)
+    email_hash = Column(String(128), nullable=False, index=True)
+    phone_hash = Column(String(128), nullable=True, index=True)
+    status = Column(String(32), nullable=False)
+    retry_after = Column(Integer, nullable=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
+    error_code = Column(String(64), nullable=True)
+
+
+class PaymentEvent(Base):
+    __tablename__ = "payment_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    provider = Column(String(32), nullable=False)
+    provider_event_id = Column(String(128), nullable=False, index=True)
+    amount = Column(Float, nullable=False)
+    currency = Column(String(16), nullable=False)
+    status = Column(String(32), nullable=False)
+    thronos_tx_id = Column(String(128), nullable=True)
+    block_height = Column(Integer, nullable=True)
+    confirmations = Column(Integer, nullable=False, default=0)
+

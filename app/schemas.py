@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, root_validator
 
 
 class DriverBase(BaseModel):
@@ -14,6 +14,13 @@ class DriverBase(BaseModel):
     notes: Optional[str] = None
     company_name: Optional[str] = None
     group_tag: Optional[str] = None
+    organization_id: Optional[int] = None
+    country_code: Optional[str] = None
+    region_code: Optional[str] = None
+    city: Optional[str] = None
+    rating_avg: Optional[float] = None
+    rating_count: int = 0
+    marketplace_opt_in: bool = False
 
 
 class DriverCreate(DriverBase):
@@ -23,6 +30,7 @@ class DriverCreate(DriverBase):
 class DriverRead(DriverBase):
     id: int
     is_verified: int
+    approved: bool = False
     wallet_address: Optional[str] = None
     company_token_symbol: Optional[str] = None
 
@@ -40,6 +48,7 @@ class TripBase(BaseModel):
 
 class TripStartRequest(TripBase):
     driver_id: Optional[int] = None
+    assignment_id: Optional[int] = None
 
 
 class TripFinishRequest(BaseModel):
@@ -54,6 +63,7 @@ class TripFinishRequest(BaseModel):
 class TripRead(TripBase):
     id: int
     driver_id: int
+    assignment_id: Optional[int] = None
     started_at: datetime
     finished_at: Optional[datetime] = None
     distance_km: Optional[float] = None
@@ -119,6 +129,14 @@ class AuthRequestCode(BaseModel):
     email: Optional[str] = None
     name: Optional[str] = None
     role: Optional[str] = "taxi"
+    group_tag: Optional[str] = None
+    organization_id: Optional[int] = None
+    country_code: Optional[str] = None
+    region_code: Optional[str] = None
+    city: Optional[str] = None
+    rating_avg: Optional[float] = None
+    rating_count: int = 0
+    marketplace_opt_in: bool = False
 
 
 class AuthVerifyCode(BaseModel):
@@ -144,6 +162,118 @@ class VoiceMessageRead(BaseModel):
     duration_sec: Optional[float] = None
     target: Optional[str] = None
     note: Optional[str] = None
+    status: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class OrganizationRead(BaseModel):
+    id: int
+    name: str
+    slug: str
+    type: str
+    status: str
+    default_group_tag: Optional[str] = None
+    title: Optional[str] = None
+    logo_url: Optional[str] = None
+    favicon_url: Optional[str] = None
+    plan: str = "basic"
+    plan_status: str = "trialing"
+    trial_ends_at: Optional[datetime] = None
+    addons_json: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class OrganizationRequestCreate(BaseModel):
+    name: str
+    city: Optional[str] = None
+    contact_email: Optional[str] = None
+    type: str = "taxi"  # taxi|school|transport|drone
+
+
+class OrganizationJoinRequest(BaseModel):
+    organization_id: int
+
+
+
+class TrialCreateRequest(BaseModel):
+    company_name: str
+    name: Optional[str] = None  # legacy alias
+    contact_email: str
+    phone: Optional[str] = None
+    type: str = "taxi"
+
+    @root_validator(pre=True)
+    def _legacy_name_alias(cls, values):
+        if values.get("company_name"):
+            return values
+        legacy_name = values.get("name")
+        if legacy_name:
+            values["company_name"] = legacy_name
+        return values
+
+
+
+class AssignmentCreateRequest(BaseModel):
+    organization_id: int
+    depart_at: Optional[datetime] = None
+    origin_country: Optional[str] = None
+    origin_region: Optional[str] = None
+    origin_city: Optional[str] = None
+    dest_country: Optional[str] = None
+    dest_region: Optional[str] = None
+    dest_city: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class AssignmentRead(BaseModel):
+    id: int
+    organization_id: int
+    depart_at: Optional[datetime] = None
+    origin_country: Optional[str] = None
+    origin_region: Optional[str] = None
+    origin_city: Optional[str] = None
+    dest_country: Optional[str] = None
+    dest_region: Optional[str] = None
+    dest_city: Optional[str] = None
+    notes: Optional[str] = None
+    status: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AssignmentClaimRead(BaseModel):
+    id: int
+    assignment_id: int
+    driver_id: int
+    status: str
+    created_at: datetime
+    approved_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class RewardGrantRequest(BaseModel):
+    driver_id: int
+    token_symbol: str
+    amount: float
+    reason: str
+
+
+class RewardEventRead(BaseModel):
+    id: int
+    organization_id: int
+    driver_id: int
+    token_symbol: str
+    amount: float
+    reason: str
     status: str
     created_at: datetime
 
