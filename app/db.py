@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 from pathlib import Path
@@ -6,6 +7,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 Base = declarative_base()
+logger = logging.getLogger(__name__)
 
 
 def _build_sqlite_url_from_path(path_str: str) -> str:
@@ -41,6 +43,27 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 def _table_columns(conn, table_name: str) -> set[str]:
     rows = conn.execute(text(f"PRAGMA table_info({table_name})"))
     return {row[1] for row in rows}
+
+
+def _has_col(conn, table_name: str, col_name: str) -> bool:
+    return col_name in _table_columns(conn, table_name)
+
+
+def _ensure_col(conn, table_name: str, col_name: str, col_type: str) -> None:
+    if _has_col(conn, table_name, col_name):
+        return
+    try:
+        conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_type}"))
+        logger.info("DB migrate: added %s.%s", table_name, col_name)
+    except Exception:
+        logger.exception("DB migrate: failed adding %s.%s", table_name, col_name)
+
+
+def _safe_execute(conn, sql: str) -> None:
+    try:
+        conn.execute(text(sql))
+    except Exception:
+        logger.exception("DB migrate: failed SQL: %s", sql)
 
 
 def _slugify(name: str) -> str:
@@ -154,13 +177,8 @@ def _run_sqlite_migrations() -> None:
             if col not in trial_columns:
                 conn.execute(text(ddl))
 
-        operator_token_columns = _table_columns(conn, "operator_tokens")
-        for col, ddl in {
-            "organization_id": "ALTER TABLE operator_tokens ADD COLUMN organization_id INTEGER",
-            "expires_at": "ALTER TABLE operator_tokens ADD COLUMN expires_at DATETIME",
-        }.items():
-            if col not in operator_token_columns:
-                conn.execute(text(ddl))
+        _ensure_col(conn, "operator_tokens", "organization_id", "INTEGER")
+        _ensure_col(conn, "operator_tokens", "expires_at", "DATETIME")
 
         voice_columns = _table_columns(conn, "voice_messages")
         for col, ddl in {
@@ -176,26 +194,33 @@ def _run_sqlite_migrations() -> None:
         conn.execute(text("UPDATE drivers SET role = 'taxi' WHERE role IS NULL OR role = ''"))
         conn.execute(text("UPDATE drivers SET phone = '+30' || printf('%09d', id) WHERE phone IS NULL OR phone = ''"))
 
-        conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_drivers_phone ON drivers(phone)"))
-        conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_sessions_token ON sessions(token)"))
-        conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_revoked_tokens_token ON revoked_tokens(token)"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_certifications_driver_id ON certifications(driver_id)"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_trips_group_tag ON trips(group_tag)"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_tenant_branding_group_tag ON tenant_branding(group_tag)"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_operator_tokens_group_tag ON operator_tokens(group_tag)"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_operator_tokens_organization_id ON operator_tokens(organization_id)"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_drivers_organization_id ON drivers(organization_id)"))
-        conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_organizations_slug ON organizations(slug)"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_organization_members_org ON organization_members(organization_id)"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_trial_attempts_created_at ON trial_attempts(created_at)"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_trial_attempts_ip_created ON trial_attempts(ip_hash, created_at)"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_trial_attempts_email_created ON trial_attempts(email_hash, created_at)"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_trial_attempts_phone_created ON trial_attempts(phone_hash, created_at)"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_trial_attempts_ip_email_created ON trial_attempts(ip_hash, email_hash, created_at)"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_voice_messages_group_tag ON voice_messages(group_tag)"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_voice_messages_driver_id ON voice_messages(driver_id)"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_voice_messages_created_at ON voice_messages(created_at)"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_payment_events_org_created ON payment_events(organization_id, created_at)"))
+        # Ensure indexed columns exist before index creation, then create indexes safely (no crash loops).
+        _ensure_col(conn, "operator_tokens", "organization_id", "INTEGER")
+
+        index_statements = [
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_drivers_phone ON drivers(phone)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_sessions_token ON sessions(token)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_revoked_tokens_token ON revoked_tokens(token)",
+            "CREATE INDEX IF NOT EXISTS ix_certifications_driver_id ON certifications(driver_id)",
+            "CREATE INDEX IF NOT EXISTS idx_trips_group_tag ON trips(group_tag)",
+            "CREATE INDEX IF NOT EXISTS idx_tenant_branding_group_tag ON tenant_branding(group_tag)",
+            "CREATE INDEX IF NOT EXISTS idx_operator_tokens_group_tag ON operator_tokens(group_tag)",
+            "CREATE INDEX IF NOT EXISTS idx_operator_tokens_organization_id ON operator_tokens(organization_id)",
+            "CREATE INDEX IF NOT EXISTS idx_drivers_organization_id ON drivers(organization_id)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_organizations_slug ON organizations(slug)",
+            "CREATE INDEX IF NOT EXISTS idx_organization_members_org ON organization_members(organization_id)",
+            "CREATE INDEX IF NOT EXISTS idx_trial_attempts_created_at ON trial_attempts(created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_trial_attempts_ip_created ON trial_attempts(ip_hash, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_trial_attempts_email_created ON trial_attempts(email_hash, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_trial_attempts_phone_created ON trial_attempts(phone_hash, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_trial_attempts_ip_email_created ON trial_attempts(ip_hash, email_hash, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_voice_messages_group_tag ON voice_messages(group_tag)",
+            "CREATE INDEX IF NOT EXISTS idx_voice_messages_driver_id ON voice_messages(driver_id)",
+            "CREATE INDEX IF NOT EXISTS idx_voice_messages_created_at ON voice_messages(created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_payment_events_org_created ON payment_events(organization_id, created_at)",
+        ]
+        for stmt in index_statements:
+            _safe_execute(conn, stmt)
 
 
 def init_db() -> None:
