@@ -106,9 +106,12 @@ def _run_sqlite_migrations() -> None:
         conn.execute(text("CREATE TABLE IF NOT EXISTS organization_requests (id INTEGER PRIMARY KEY, name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE, city TEXT NULL, contact_email TEXT NULL, type TEXT NOT NULL DEFAULT 'taxi', status TEXT NOT NULL DEFAULT 'pending', created_at DATETIME NOT NULL)"))
         conn.execute(text("CREATE TABLE IF NOT EXISTS trial_attempts (id INTEGER PRIMARY KEY, created_at DATETIME NOT NULL, ip_hash TEXT NOT NULL, email_hash TEXT NOT NULL, phone_hash TEXT NULL, status TEXT NOT NULL, retry_after INTEGER NULL, organization_id INTEGER NULL, error_code TEXT NULL)"))
         conn.execute(text("CREATE TABLE IF NOT EXISTS payment_events (id INTEGER PRIMARY KEY, created_at DATETIME NOT NULL, organization_id INTEGER NOT NULL, provider TEXT NOT NULL, provider_event_id TEXT NOT NULL, amount REAL NOT NULL, currency TEXT NOT NULL, status TEXT NOT NULL, thronos_tx_id TEXT NULL, block_height INTEGER NULL, confirmations INTEGER NOT NULL DEFAULT 0, FOREIGN KEY(organization_id) REFERENCES organizations(id))"))
+<<<<<<< codex/add-logging-for-email-sending-status-eei6dq
         conn.execute(text("CREATE TABLE IF NOT EXISTS assignments (id INTEGER PRIMARY KEY, organization_id INTEGER NOT NULL, depart_at DATETIME NULL, origin_country TEXT NULL, origin_region TEXT NULL, origin_city TEXT NULL, dest_country TEXT NULL, dest_region TEXT NULL, dest_city TEXT NULL, notes TEXT NULL, status TEXT NOT NULL DEFAULT 'open', created_at DATETIME NOT NULL, FOREIGN KEY(organization_id) REFERENCES organizations(id))"))
         conn.execute(text("CREATE TABLE IF NOT EXISTS assignment_claims (id INTEGER PRIMARY KEY, assignment_id INTEGER NOT NULL, driver_id INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created_at DATETIME NOT NULL, approved_at DATETIME NULL, FOREIGN KEY(assignment_id) REFERENCES assignments(id), FOREIGN KEY(driver_id) REFERENCES drivers(id))"))
         conn.execute(text("CREATE TABLE IF NOT EXISTS reward_events (id INTEGER PRIMARY KEY, organization_id INTEGER NOT NULL, driver_id INTEGER NOT NULL, token_symbol TEXT NOT NULL, amount REAL NOT NULL, reason TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'queued', created_at DATETIME NOT NULL, FOREIGN KEY(organization_id) REFERENCES organizations(id), FOREIGN KEY(driver_id) REFERENCES drivers(id))"))
+=======
+>>>>>>> main
 
         driver_columns = _table_columns(conn, "drivers")
         driver_alterations = {
@@ -133,12 +136,15 @@ def _run_sqlite_migrations() -> None:
             "group_tag": "ALTER TABLE drivers ADD COLUMN group_tag TEXT",
             "approved": "ALTER TABLE drivers ADD COLUMN approved INTEGER NOT NULL DEFAULT 0",
             "organization_id": "ALTER TABLE drivers ADD COLUMN organization_id INTEGER",
+<<<<<<< codex/add-logging-for-email-sending-status-eei6dq
             "country_code": "ALTER TABLE drivers ADD COLUMN country_code TEXT",
             "region_code": "ALTER TABLE drivers ADD COLUMN region_code TEXT",
             "city": "ALTER TABLE drivers ADD COLUMN city TEXT",
             "rating_avg": "ALTER TABLE drivers ADD COLUMN rating_avg REAL",
             "rating_count": "ALTER TABLE drivers ADD COLUMN rating_count INTEGER NOT NULL DEFAULT 0",
             "marketplace_opt_in": "ALTER TABLE drivers ADD COLUMN marketplace_opt_in INTEGER NOT NULL DEFAULT 0",
+=======
+>>>>>>> main
         }
         for col, ddl in driver_alterations.items():
             if col not in driver_columns:
@@ -149,7 +155,10 @@ def _run_sqlite_migrations() -> None:
             "company_name": "ALTER TABLE trips ADD COLUMN company_name TEXT",
             "group_tag": "ALTER TABLE trips ADD COLUMN group_tag TEXT",
             "organization_id": "ALTER TABLE trips ADD COLUMN organization_id INTEGER",
+<<<<<<< codex/add-logging-for-email-sending-status-eei6dq
             "assignment_id": "ALTER TABLE trips ADD COLUMN assignment_id INTEGER",
+=======
+>>>>>>> main
             "reward_points": "ALTER TABLE trips ADD COLUMN reward_points REAL",
         }
         for col, ddl in trip_alterations.items():
@@ -215,7 +224,10 @@ def _run_sqlite_migrations() -> None:
             "CREATE UNIQUE INDEX IF NOT EXISTS ix_revoked_tokens_token ON revoked_tokens(token)",
             "CREATE INDEX IF NOT EXISTS ix_certifications_driver_id ON certifications(driver_id)",
             "CREATE INDEX IF NOT EXISTS idx_trips_group_tag ON trips(group_tag)",
+<<<<<<< codex/add-logging-for-email-sending-status-eei6dq
             "CREATE INDEX IF NOT EXISTS idx_trips_assignment_id ON trips(assignment_id)",
+=======
+>>>>>>> main
             "CREATE INDEX IF NOT EXISTS idx_tenant_branding_group_tag ON tenant_branding(group_tag)",
             "CREATE INDEX IF NOT EXISTS idx_operator_tokens_group_tag ON operator_tokens(group_tag)",
             "CREATE INDEX IF NOT EXISTS idx_operator_tokens_organization_id ON operator_tokens(organization_id)",
@@ -232,12 +244,15 @@ def _run_sqlite_migrations() -> None:
             "CREATE INDEX IF NOT EXISTS idx_voice_messages_driver_id ON voice_messages(driver_id)",
             "CREATE INDEX IF NOT EXISTS idx_voice_messages_created_at ON voice_messages(created_at)",
             "CREATE INDEX IF NOT EXISTS idx_payment_events_org_created ON payment_events(organization_id, created_at)",
+<<<<<<< codex/add-logging-for-email-sending-status-eei6dq
             "CREATE INDEX IF NOT EXISTS idx_drivers_marketplace_opt_in ON drivers(marketplace_opt_in)",
             "CREATE INDEX IF NOT EXISTS idx_drivers_location ON drivers(country_code, region_code, city)",
             "CREATE INDEX IF NOT EXISTS idx_assignments_org_status ON assignments(organization_id, status)",
             "CREATE INDEX IF NOT EXISTS idx_assignment_claims_assignment_status ON assignment_claims(assignment_id, status)",
             "CREATE INDEX IF NOT EXISTS idx_assignment_claims_driver_status ON assignment_claims(driver_id, status)",
             "CREATE INDEX IF NOT EXISTS idx_reward_events_org_driver ON reward_events(organization_id, driver_id)",
+=======
+>>>>>>> main
         ]
         for stmt in index_statements:
             _safe_execute(conn, stmt)

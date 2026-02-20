@@ -877,7 +877,11 @@ def api_create_trial(req: schemas.TrialCreateRequest, request: Request, db: Sess
         row = models.Organization(
             name=company_name,
             slug=slug,
+<<<<<<< codex/add-logging-for-email-sending-status-eei6dq
             type=_normalize_org_type(req.type),
+=======
+            type=req.type,
+>>>>>>> main
             status="active",
             default_group_tag=f"{slug}-a",
             title=company_name,
@@ -947,7 +951,11 @@ def api_organization_request(req: schemas.OrganizationRequestCreate, db: Session
         slug=slug,
         city=(req.city or "").strip() or None,
         contact_email=(req.contact_email or "").strip() or None,
+<<<<<<< codex/add-logging-for-email-sending-status-eei6dq
         type=_normalize_org_type(req.type),
+=======
+        type=req.type or "taxi",
+>>>>>>> main
         status="pending",
         created_at=datetime.utcnow(),
     )
@@ -972,7 +980,11 @@ def api_organization_approve(
         row = models.Organization(
             name=req.name,
             slug=req.slug,
+<<<<<<< codex/add-logging-for-email-sending-status-eei6dq
             type=_normalize_org_type(req.type),
+=======
+            type=req.type,
+>>>>>>> main
             status="active",
             default_group_tag=req.slug + "-a",
             title=req.name,
