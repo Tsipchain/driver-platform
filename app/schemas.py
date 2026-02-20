@@ -166,6 +166,10 @@ class OrganizationRead(BaseModel):
     title: Optional[str] = None
     logo_url: Optional[str] = None
     favicon_url: Optional[str] = None
+    plan: str = "basic"
+    plan_status: str = "trialing"
+    trial_ends_at: Optional[datetime] = None
+    addons_json: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -180,4 +184,12 @@ class OrganizationRequestCreate(BaseModel):
 
 class OrganizationJoinRequest(BaseModel):
     organization_id: int
+
+
+
+class TrialCreateRequest(BaseModel):
+    company_name: str
+    type: str = "taxi"
+    contact_email: str
+    phone: Optional[str] = None
 

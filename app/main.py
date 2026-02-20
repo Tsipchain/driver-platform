@@ -51,6 +51,23 @@ def slugify_text(value: str) -> str:
     base = re.sub(r"-+", "-", base).strip("-")
     return base or f"org-{secrets.token_hex(3)}"
 
+def make_unique_slug(db: Session, company_name: str) -> str:
+    base = slugify_text(company_name)
+    slug = base
+    n = 1
+    while db.query(models.Organization).filter(models.Organization.slug == slug).first() is not None:
+        n += 1
+        slug = f"{base}-{n}"
+    return slug
+
+
+def _client_ip(request: Request) -> str:
+    xff = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    if xff:
+        return xff
+    return request.client.host if request.client else "unknown"
+
+
 def mask_value(email: Optional[str], phone: str) -> str:
     if email:
         parts = email.split("@")
@@ -347,6 +364,49 @@ def _branding_defaults(group_tag: Optional[str]) -> dict:
         "primary_color": "#00ff88",
     }
 
+
+
+PLANS_MATRIX = {
+    "basic": {
+        "features": ["trips", "telemetry_manual", "telemetry_auto_gps", "operator_map_basic", "otp_login", "voice_send_only"],
+    },
+    "pro": {
+        "features": ["trips", "telemetry_manual", "telemetry_auto_gps", "operator_map_basic", "voice_send_only", "voice_reply", "events_filters", "exports_pdf", "white_label_branding", "retention_12m"],
+    },
+    "enterprise": {
+        "features": ["trips", "telemetry_manual", "telemetry_auto_gps", "operator_map_basic", "voice_send_only", "voice_reply", "events_filters", "exports_pdf", "white_label_branding", "retention_12m", "multi_org", "custom_domain", "rewards_module"],
+    },
+}
+
+
+def _addons_set(addons_json: Optional[str]) -> set[str]:
+    if not addons_json:
+        return set()
+    try:
+        import json
+        data = json.loads(addons_json)
+        if isinstance(data, list):
+            return {str(x) for x in data}
+        if isinstance(data, dict):
+            return {k for k, v in data.items() if v}
+    except Exception:
+        return set()
+    return set()
+
+
+def is_feature_enabled(org: Optional[models.Organization], feature: str) -> bool:
+    if org is None:
+        return feature in PLANS_MATRIX["basic"]["features"]
+    plan = (org.plan or "basic").lower()
+    base = set(PLANS_MATRIX.get(plan, PLANS_MATRIX["basic"])["features"])
+    addons = _addons_set(org.addons_json)
+    if "white_label" in addons:
+        base.add("white_label_branding")
+    if "rewards" in addons:
+        base.add("rewards_module")
+    if "pdf_packs" in addons:
+        base.add("exports_pdf")
+    return feature in base
 
 def _parse_multipart_voice_payload(raw_body: bytes, content_type: str) -> tuple[bytes, str, Optional[int], Optional[str], Optional[str], Optional[int], Optional[str]]:
     boundary_marker = "boundary="
@@ -693,6 +753,70 @@ def api_recent_voice_messages(
     return {"items": out}
 
 
+@app.get("/api/plans")
+def api_plans():
+    return {
+        "plans": PLANS_MATRIX,
+        "addons": ["white_label", "extra_retention", "pdf_packs", "ai_scoring", "rewards"],
+    }
+
+
+@app.post("/api/trials/create")
+def api_create_trial(req: schemas.TrialCreateRequest, request: Request, db: Session = Depends(get_db)):
+    ip_address = _client_ip(request)
+    contact_email = (req.contact_email or "").strip().lower()
+    phone = normalize_phone(req.phone or "") if req.phone else None
+    company_name = (req.company_name or "").strip()
+    now = datetime.utcnow()
+    window_start = now - timedelta(hours=1)
+
+    by_ip = db.query(models.TrialAttempt).filter(models.TrialAttempt.ip_address == ip_address, models.TrialAttempt.created_at >= window_start).count()
+    by_email = db.query(models.TrialAttempt).filter(models.TrialAttempt.contact_email == contact_email, models.TrialAttempt.created_at >= window_start).count() if contact_email else 0
+    by_phone = db.query(models.TrialAttempt).filter(models.TrialAttempt.phone == phone, models.TrialAttempt.created_at >= window_start).count() if phone else 0
+    rate_limited = by_ip >= 8 or by_email >= 4 or by_phone >= 4
+
+    attempt = models.TrialAttempt(
+        ip_address=ip_address,
+        contact_email=contact_email or None,
+        phone=phone,
+        company_name=company_name,
+        created_at=now,
+        success=False,
+    )
+    db.add(attempt)
+
+    if rate_limited:
+        db.commit()
+        raise HTTPException(status_code=429, detail="Too many trial attempts. Please try later.")
+
+    slug = make_unique_slug(db, company_name)
+    row = models.Organization(
+        name=company_name,
+        slug=slug,
+        type=req.type,
+        status="active",
+        default_group_tag=f"{slug}-a",
+        title=company_name,
+        plan="basic",
+        plan_status="trialing",
+        trial_ends_at=now + timedelta(days=14),
+        created_at=now,
+    )
+    db.add(row)
+    db.flush()
+
+    attempt.success = True
+    db.commit()
+    db.refresh(row)
+    return {
+        "ok": True,
+        "organization_id": row.id,
+        "slug": row.slug,
+        "group_tag": row.default_group_tag,
+        "trial_ends_at": row.trial_ends_at,
+    }
+
+
 @app.get("/api/organizations", response_model=List[schemas.OrganizationRead])
 def api_list_organizations(
     type: Optional[str] = None,
@@ -816,8 +940,6 @@ def api_operator_dashboard(
         effective_group = (org.default_group_tag if org else None) or forced_group
     else:
         effective_group = forced_group or group_tag
-    if forced_org and driver.organization_id != forced_org:
-        raise HTTPException(status_code=403, detail="Forbidden")
     return crud.get_operator_dashboard(db, group_tag=effective_group)
 
 
@@ -878,7 +1000,11 @@ def api_operator_recent_events(
 
 
 @app.get("/api/branding")
-def api_branding(group_tag: Optional[str] = None, db: Session = Depends(get_db)):
+def api_branding(group_tag: Optional[str] = None, org: Optional[int] = None, db: Session = Depends(get_db)):
+    if org and not group_tag:
+        org_row = crud.get_organization(db, org)
+        if org_row:
+            group_tag = org_row.default_group_tag
     defaults = _branding_defaults(group_tag)
     if not group_tag:
         return defaults
@@ -907,6 +1033,10 @@ async def api_admin_branding(request: Request, x_admin_token: Optional[str] = He
     group_tag = (form.get("group_tag") or "").strip()
     if not group_tag:
         raise HTTPException(status_code=400, detail="group_tag required")
+
+    org = db.query(models.Organization).filter(models.Organization.default_group_tag == group_tag).first()
+    if org and not is_feature_enabled(org, "white_label_branding"):
+        raise HTTPException(status_code=403, detail="Branding available on Pro/Enterprise or addon")
 
     row = db.query(models.TenantBranding).filter(models.TenantBranding.group_tag == group_tag).first()
     if not row:
@@ -1014,6 +1144,10 @@ async def api_operator_voice_send(
             raise HTTPException(status_code=403, detail="Forbidden")
         if forced_org and target_driver.organization_id != forced_org:
             raise HTTPException(status_code=403, detail="Forbidden")
+        if target_driver.organization_id:
+            org = crud.get_organization(db, target_driver.organization_id)
+            if not is_feature_enabled(org, "voice_reply"):
+                raise HTTPException(status_code=403, detail="Voice reply not enabled for plan")
         target_group = target_driver.group_tag or target_group
     elif target_group:
         q = db.query(models.Driver).filter(models.Driver.group_tag == target_group)
@@ -1267,18 +1401,30 @@ def api_driver_score(driver_id: int, db: Session = Depends(get_db)):
     )
 
 
+@app.get("/")
+def landing_page():
+    file_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "index.html")
+    return FileResponse(file_path)
+
+
+@app.get("/app")
+def app_page():
+    file_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "app.html")
+    return FileResponse(file_path)
+
+
 @app.get("/operator")
 def operator_page():
-    index_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "index.html")
-    return FileResponse(index_file)
+    file_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "app.html")
+    return FileResponse(file_path)
 
 
 @app.get("/school")
 def school_page():
-    index_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "index.html")
-    return FileResponse(index_file)
+    file_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "app.html")
+    return FileResponse(file_path)
 
 
 frontend_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend")
 if os.path.isdir(frontend_dir):
-    app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="frontend")
+    app.mount("/", StaticFiles(directory=frontend_dir, html=False), name="frontend")

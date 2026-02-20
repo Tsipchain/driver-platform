@@ -64,7 +64,11 @@ async function loadOrganizations() {
     const resp = await fetch(`${API_BASE}/api/organizations?status=active`);
     if (!resp.ok) return;
     const items = await resp.json();
-    sel.innerHTML = '<option value="">— Ελεύθερος επαγγελματίας —</option>' + (items || []).map(o => `<option value="${o.id}">${o.name}</option>`).join('');
+    sel.innerHTML = '<option value="">— Ελεύθερος επαγγελματίας —</option>' + (items || []).map(o => `<option value="${o.id}" data-group="${o.default_group_tag || ""}">${o.name}</option>`).join('');
+    const opSel = $("operatorOrgSelect");
+    if (opSel) {
+      opSel.innerHTML = '<option value="">Επιλογή οργανισμού</option>' + (items || []).map(o => `<option value="${o.id}" data-group="${o.default_group_tag || ""}">${o.name}</option>`).join('');
+    }
   } catch (_) {}
 }
 
@@ -410,9 +414,34 @@ function renderOperatorData(data) {
   $("operatorTable").innerHTML = `<table style="width:100%;font-size:12px;"><thead><tr><th>Name</th><th>Status</th><th>Speed</th><th>Last ts</th></tr></thead><tbody>${rows || '<tr><td colspan="4">No data</td></tr>'}</tbody></table>`;
 }
 
+function getOperatorToken() {
+  return $("operatorAdminToken")?.value.trim() || localStorage.getItem("operator_token") || "";
+}
+
+function getOperatorGroupTag() {
+  return localStorage.getItem("operator_group_tag") || "";
+}
+
+function openOperatorLoginModal() {
+  $("operatorLoginModal")?.style && ($("operatorLoginModal").style.display = "block");
+}
+
+function closeOperatorLoginModal() {
+  $("operatorLoginModal")?.style && ($("operatorLoginModal").style.display = "none");
+}
+
+function submitOperatorLogin() {
+  const token = $("operatorAdminToken")?.value.trim() || "";
+  const group = $("operatorOrgSelect")?.selectedOptions?.[0]?.getAttribute("data-group") || "";
+  if (token) localStorage.setItem("operator_token", token);
+  localStorage.setItem("operator_group_tag", group || "");
+  if ($("operatorAuthState")) $("operatorAuthState").textContent = token ? "Authenticated" : "Not authenticated";
+  closeOperatorLoginModal();
+}
+
 async function loadOperatorDashboard() {
-  const token = $("operatorAdminToken").value.trim();
-  const groupTag = $("operatorGroupTag").value.trim();
+  const token = getOperatorToken();
+  const groupTag = getOperatorGroupTag();
   const qs = new URLSearchParams();
   if (groupTag) qs.set("group_tag", groupTag);
   const resp = await fetch(`${API_BASE}/api/operator/dashboard?${qs.toString()}`, { headers: { "X-Admin-Token": token } });
@@ -441,12 +470,13 @@ async function logout() {
   }
 
   renderAuthState();
+  window.location.href = "/app";
 }
 
 
 async function loadOperatorVoice() {
-  const token = $("operatorAdminToken").value.trim();
-  const groupTag = $("operatorGroupTag").value.trim();
+  const token = getOperatorToken();
+  const groupTag = getOperatorGroupTag();
   const qs = new URLSearchParams();
   if (groupTag) qs.set('group_tag', groupTag);
   const resp = await fetch(`${API_BASE}/api/v1/voice-messages/operator-inbox?${qs.toString()}`, { headers: { 'X-Admin-Token': token } });
@@ -462,7 +492,7 @@ async function loadOperatorVoice() {
 }
 
 async function replyOperatorVoice(driverId) {
-  const token = $("operatorAdminToken").value.trim();
+  const token = getOperatorToken();
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   const chunks=[];
   const rec = new MediaRecorder(stream, { mimeType: 'audio/webm' });
@@ -532,8 +562,8 @@ function stopAutoGps() {
 }
 
 async function loadPendingDrivers() {
-  const token = $("operatorAdminToken")?.value.trim();
-  const groupTag = $("operatorGroupTag")?.value.trim();
+  const token = getOperatorToken();
+  const groupTag = getOperatorGroupTag();
   const qs = new URLSearchParams();
   if (groupTag) qs.set("group_tag", groupTag);
   const resp = await fetch(`${API_BASE}/api/operator/pending-drivers?${qs.toString()}`, { headers: { "X-Admin-Token": token } });
@@ -561,6 +591,10 @@ window.addEventListener("DOMContentLoaded", () => {
   if (getToken()) startCbInboxPolling();
 
   if (isOperatorMode()) {
+    if ($("operatorAuthState")) $("operatorAuthState").textContent = getOperatorToken() ? "Authenticated" : "Not authenticated";
+    $("btnOperatorLogin")?.addEventListener("click", openOperatorLoginModal);
+    $("btnCloseOperatorLogin")?.addEventListener("click", closeOperatorLoginModal);
+    $("btnSubmitOperatorLogin")?.addEventListener("click", submitOperatorLogin);
     $("btnLoadOperator")?.addEventListener("click", async () => { await loadOperatorDashboard(); await loadOperatorVoice(); await loadPendingDrivers(); });
     initOperatorMap();
     applyBranding();
@@ -568,6 +602,9 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   $("btnSendCode")?.addEventListener("click", requestCode);
+  $("btnOperatorLogin")?.addEventListener("click", openOperatorLoginModal);
+  $("btnCloseOperatorLogin")?.addEventListener("click", closeOperatorLoginModal);
+  $("btnSubmitOperatorLogin")?.addEventListener("click", submitOperatorLogin);
   $("btnRequestOrg")?.addEventListener("click", openRequestOrgModal);
   $("btnCloseRequestOrg")?.addEventListener("click", closeRequestOrgModal);
   $("btnSubmitRequestOrg")?.addEventListener("click", submitOrganizationRequest);

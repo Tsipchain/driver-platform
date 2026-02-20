@@ -169,6 +169,10 @@ class Organization(Base):
     token_symbol = Column(String(32), nullable=True)
     treasury_wallet = Column(String(255), nullable=True)
     reward_policy_json = Column(Text, nullable=True)
+    plan = Column(String(32), nullable=False, default="basic")
+    plan_status = Column(String(32), nullable=False, default="trialing")
+    trial_ends_at = Column(DateTime, nullable=True)
+    addons_json = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
@@ -220,3 +224,16 @@ class OperatorToken(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     last_used_at = Column(DateTime, nullable=True)
     expires_at = Column(DateTime, nullable=True)
+
+
+class TrialAttempt(Base):
+    __tablename__ = "trial_attempts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    ip_address = Column(String(64), nullable=True, index=True)
+    contact_email = Column(String(255), nullable=True, index=True)
+    phone = Column(String(64), nullable=True, index=True)
+    company_name = Column(String(128), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    success = Column(Boolean, nullable=False, default=False)
+
