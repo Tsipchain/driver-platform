@@ -221,6 +221,9 @@ class TrialCreateRequest(BaseModel):
 class SchoolAddStudentRequest(BaseModel):
     phone: str
     name: Optional[str] = None
+
+
+class AssignmentCreateRequest(BaseModel):
     organization_id: int
     depart_at: Optional[datetime] = None
     origin_country: Optional[str] = None
