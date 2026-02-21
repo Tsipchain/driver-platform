@@ -81,6 +81,20 @@
           <div class="small-text" id="voiceStatus">Πάτα για εγγραφή έως 30s.</div>
           <div class="row" style="margin-top:8px;"><button class="primary full" id="btnVoiceRecord">Start Voice</button><button class="outline full" id="btnVoiceStop" disabled>Stop & Send</button></div>
         </div>
+
+        <!-- School instructor: student management (hidden for other roles) -->
+        <div class="card" id="studentsCard" style="display:none;">
+          <div class="card-header">
+            <div class="card-title">Μαθητές μου</div>
+            <button class="outline" id="btnRefreshStudents">↻ Ανανέωση</button>
+          </div>
+          <div class="row" style="gap:8px;align-items:flex-end;">
+            <div class="field-group" style="flex:1;margin:0;"><label for="studentPhone">Κινητό μαθητή</label><input id="studentPhone" placeholder="69XXXXXXXX" /></div>
+            <div class="field-group" style="flex:1;margin:0;"><label for="studentName">Όνομα (προαιρ.)</label><input id="studentName" placeholder="π.χ. Νίκος" /></div>
+            <button class="primary" id="btnAddStudent" style="height:38px;">+</button>
+          </div>
+          <div id="studentsList" class="small-text" style="margin-top:10px;">-</div>
+        </div>
       </div>
 
       <div id="profileScreen" class="card" style="display:none;">
@@ -88,6 +102,32 @@
         <div class="field-group"><label>Τηλέφωνο</label><input id="profilePhone" readonly /></div>
         <div class="field-group"><label for="profileName">Όνομα</label><input id="profileName" /></div>
         <div class="field-group"><label>Role</label><input id="profileRole" readonly /></div>
+
+        <!-- Org: read-only for school/transport/drone members -->
+        <div id="orgLockedSection" style="display:none;">
+          <div class="field-group"><label>Φορέας</label><input id="profileOrgName" readonly /></div>
+          <div class="small-text" id="profileOrgStatus" style="margin-bottom:8px;"></div>
+        </div>
+
+        <!-- Org: picker for taxi drivers / free professionals -->
+        <div id="orgPickerSection" style="display:none;">
+          <div class="field-group">
+            <label for="profileCity">Πόλη σου (για εύρεση φορέα)</label>
+            <div class="row" style="gap:8px;">
+              <input id="profileCity" placeholder="π.χ. Αθήνα" style="flex:1;" />
+              <button class="outline" id="btnFindOrgs">Εύρεση</button>
+            </div>
+          </div>
+          <div id="nearbyOrgsWrap" style="display:none;">
+            <div class="field-group">
+              <label for="profileOrgSelect">Επιλογή φορέα Taxi</label>
+              <select id="profileOrgSelect"><option value="">— Χωρίς φορέα —</option></select>
+            </div>
+            <button class="outline full" id="btnJoinOrg">Αίτηση ένταξης</button>
+          </div>
+          <div class="small-text" id="orgPickerMsg" style="margin-bottom:8px;"></div>
+        </div>
+
         <div class="field-group"><label for="walletAddress">Thronos Wallet Address</label><input id="walletAddress" placeholder="THR... ή 0x..." /></div>
         <div class="field-group"><label for="tokenSymbol">Company Token Symbol</label><input id="tokenSymbol" placeholder="π.χ. TAXI" /></div>
         <button class="primary full" id="btnSaveWallet">Αποθήκευση Wallet</button>

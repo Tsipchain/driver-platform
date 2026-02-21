@@ -255,8 +255,106 @@ async function verifyCode() {
   }
   const data = await resp.json();
   setSession(data);
+  await enrichDriverProfile();
   renderAuthState();
+  afterLoginSetup();
   startCbInboxPolling();
+}
+
+async function enrichDriverProfile() {
+  try {
+    const resp = await apiFetch("/api/me", { skipUnauthorizedRedirect: true });
+    if (!resp.ok) return;
+    const me = await resp.json();
+    const profile = JSON.parse(localStorage.getItem("driverProfile") || "{}");
+    profile.org_type = me.org_type || null;
+    profile.org_name = me.org_name || null;
+    localStorage.setItem("driverProfile", JSON.stringify(profile));
+  } catch (_) {}
+}
+
+function afterLoginSetup() {
+  const profile = JSON.parse(localStorage.getItem("driverProfile") || "{}");
+  const studentsCard = $("studentsCard");
+  if (studentsCard) {
+    if (profile.role === "school") {
+      studentsCard.style.display = "block";
+      loadStudents();
+    } else {
+      studentsCard.style.display = "none";
+    }
+  }
+}
+
+async function loadStudents() {
+  try {
+    const resp = await apiFetch("/api/school/students", { skipUnauthorizedRedirect: true });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const list = $("studentsList");
+    if (!list) return;
+    if (!data.students || !data.students.length) {
+      list.textContent = "Δεν έχεις μαθητές ακόμα. Πρόσθεσε με το κινητό τους.";
+      return;
+    }
+    list.innerHTML = data.students.map(s =>
+      `<div style="margin:6px 0;padding:8px;background:rgba(255,255,255,0.05);border-radius:6px;">
+        <strong>${s.name || s.phone}</strong> — ${s.phone}
+        ${s.approved ? '<span style="color:var(--accent);margin-left:6px;">✓ Εγκεκριμένος</span>' : '<span style="opacity:0.6;margin-left:6px;">Αναμονή</span>'}
+        ${s.total_trips ? ` &nbsp;|&nbsp; ${s.total_trips} δρομολόγια` : ''}
+        ${s.score != null ? ` &nbsp;|&nbsp; Score: <strong>${s.score}</strong>/100` : ''}
+      </div>`
+    ).join('');
+  } catch (_) {}
+}
+
+async function addStudent() {
+  const phone = $("studentPhone")?.value.trim();
+  const name = $("studentName")?.value.trim() || null;
+  if (!phone) return toast("Εισήγαγε κινητό μαθητή.");
+  const resp = await apiFetch("/api/school/students", {
+    method: "POST",
+    body: JSON.stringify({ phone, name }),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    return toast(err.detail || "Αποτυχία προσθήκης μαθητή.");
+  }
+  if ($("studentPhone")) $("studentPhone").value = "";
+  if ($("studentName")) $("studentName").value = "";
+  await loadStudents();
+}
+
+async function loadNearbyOrgs() {
+  const city = $("profileCity")?.value.trim() || null;
+  const qs = "?type=taxi" + (city ? `&city=${encodeURIComponent(city)}` : "");
+  try {
+    const resp = await fetch(`${API_BASE}/api/organizations/nearby${qs}`);
+    if (!resp.ok) return;
+    const items = await resp.json();
+    const sel = $("profileOrgSelect");
+    if (!sel) return;
+    sel.innerHTML = '<option value="">— Χωρίς φορέα —</option>' +
+      (items || []).map(o => `<option value="${o.id}">${o.name}</option>`).join('');
+    const wrap = $("nearbyOrgsWrap");
+    if (wrap) wrap.style.display = items.length ? "block" : "none";
+    if ($("orgPickerMsg")) $("orgPickerMsg").textContent = items.length
+      ? `Βρέθηκαν ${items.length} φορείς Taxi.`
+      : "Δεν βρέθηκαν ενεργοί φορείς.";
+  } catch (_) {}
+}
+
+async function joinOrg() {
+  const orgId = Number($("profileOrgSelect")?.value);
+  if (!orgId) return toast("Επίλεξε φορέα από τη λίστα.");
+  const resp = await apiFetch(`/api/organizations/${orgId}/join`, { method: "POST" });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    return toast(err.detail || "Αποτυχία αίτησης ένταξης.");
+  }
+  await enrichDriverProfile();
+  if ($("orgPickerMsg")) $("orgPickerMsg").textContent = "Αίτηση ένταξης υποβλήθηκε. Αναμονή έγκρισης από τον φορέα.";
+  if ($("nearbyOrgsWrap")) $("nearbyOrgsWrap").style.display = "none";
 }
 
 async function startTrip() {
@@ -364,10 +462,36 @@ async function uploadVoice() {
 async function openProfile() {
   $("dashboardScreen").style.display = "none";
   $("profileScreen").style.display = "block";
+  // Refresh org info before showing
+  await enrichDriverProfile();
   const driver = JSON.parse(localStorage.getItem("driverProfile") || "{}");
   $("profilePhone").value = driver.phone || "";
   $("profileName").value = driver.name || "";
   $("profileRole").value = driver.role || "taxi";
+
+  const orgLocked = $("orgLockedSection");
+  const orgPicker = $("orgPickerSection");
+  const orgType = driver.org_type;
+  const lockedTypes = ["school", "transport", "drone"];
+
+  if (driver.organization_id && lockedTypes.includes(orgType)) {
+    // Non-taxi org member: read-only, cannot change
+    if (orgLocked) orgLocked.style.display = "block";
+    if (orgPicker) orgPicker.style.display = "none";
+    if ($("profileOrgName")) $("profileOrgName").value = driver.org_name || `Φορέας #${driver.organization_id}`;
+    const roleLabel = orgType === "school" ? "Σχολή Οδήγησης" : orgType === "transport" ? "Μεταφορική" : "Drone";
+    if ($("profileOrgStatus")) $("profileOrgStatus").textContent =
+      `${roleLabel} · ${driver.approved ? "✓ Εγκεκριμένος" : "⏳ Αναμονή έγκρισης"}`;
+  } else {
+    // Taxi or free professional: show org picker
+    if (orgLocked) orgLocked.style.display = "none";
+    if (orgPicker) orgPicker.style.display = "block";
+    if (driver.organization_id && orgType === "taxi") {
+      if ($("orgPickerMsg")) $("orgPickerMsg").textContent =
+        `Φορέας: ${driver.org_name || "#" + driver.organization_id} · ${driver.approved ? "✓ Εγκεκριμένος" : "⏳ Αναμονή έγκρισης"}`;
+    }
+  }
+
   const walletResp = await apiFetch("/api/wallet");
   if (walletResp.ok) {
     const wallet = await walletResp.json();
@@ -605,7 +729,6 @@ window.addEventListener("DOMContentLoaded", () => {
   loadOrganizations();
   tripActive = !!localStorage.getItem("current_trip_id");
   applyBranding();
-  if (getToken()) startCbInboxPolling();
 
   if (isOperatorMode()) {
     if ($("operatorAuthState")) $("operatorAuthState").textContent = getOperatorToken() ? "Authenticated" : "Not authenticated";
@@ -640,4 +763,15 @@ window.addEventListener("DOMContentLoaded", () => {
   });
   $("btnSaveWallet")?.addEventListener("click", saveWallet);
   $("logoutBtn")?.addEventListener("click", logout);
+  // Org picker (taxi free professionals)
+  $("btnFindOrgs")?.addEventListener("click", loadNearbyOrgs);
+  $("btnJoinOrg")?.addEventListener("click", joinOrg);
+  // School student management
+  $("btnAddStudent")?.addEventListener("click", addStudent);
+  $("btnRefreshStudents")?.addEventListener("click", loadStudents);
+  // Restore students card & CB inbox if already logged in
+  if (getToken()) {
+    afterLoginSetup();
+    startCbInboxPolling();
+  }
 });

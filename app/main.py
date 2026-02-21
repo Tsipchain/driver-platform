@@ -646,6 +646,7 @@ def logout(authorization: Optional[str] = Header(default=None), db: Session = De
 
 @app.get("/api/me")
 def me(current_driver: Driver = Depends(get_current_driver), db: Session = Depends(get_db)):
+    org = crud.get_organization(db, current_driver.organization_id) if current_driver.organization_id else None
     return {
         "id": current_driver.id,
         "phone": current_driver.phone,
@@ -656,6 +657,8 @@ def me(current_driver: Driver = Depends(get_current_driver), db: Session = Depen
         "company_token_symbol": current_driver.company_token_symbol,
         "group_tag": current_driver.group_tag,
         "organization_id": current_driver.organization_id,
+        "org_type": org.type if org else None,
+        "org_name": org.name if org else None,
         "approved": bool(current_driver.approved),
         "company_name": current_driver.company_name,
         "stats": {
@@ -1707,6 +1710,113 @@ def api_driver_score(driver_id: int, db: Session = Depends(get_db)):
         avg_speed_kmh=avg_speed,
         score_0_100=score,
     )
+
+
+@app.get("/api/organizations/nearby", response_model=List[schemas.OrganizationRead])
+def api_organizations_nearby(
+    type: Optional[str] = "taxi",
+    city: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    org_type = _normalize_org_type(type or "taxi")
+    q = db.query(models.Organization).filter(
+        models.Organization.status == "active",
+        models.Organization.type == org_type,
+    )
+    return q.order_by(models.Organization.name).limit(50).all()
+
+
+@app.get("/api/school/students")
+def api_school_students(
+    current_driver: Driver = Depends(get_current_driver),
+    db: Session = Depends(get_db),
+):
+    if current_driver.role != "school":
+        raise HTTPException(status_code=403, detail="School instructors only")
+    if not current_driver.organization_id:
+        return {"students": []}
+    members = (
+        db.query(models.OrganizationMember)
+        .filter(
+            models.OrganizationMember.organization_id == current_driver.organization_id,
+            models.OrganizationMember.driver_id != current_driver.id,
+        )
+        .all()
+    )
+    students = []
+    for m in members:
+        d = crud.get_driver(db, m.driver_id)
+        if not d:
+            continue
+        total_trips, _, _, _, _, score = crud.compute_driver_score(db, d.id)
+        students.append({
+            "id": d.id,
+            "name": d.name,
+            "phone": d.phone,
+            "approved": bool(d.approved),
+            "score": round(score, 1),
+            "total_trips": total_trips,
+        })
+    return {"students": students}
+
+
+@app.post("/api/school/students", status_code=201)
+def api_school_add_student(
+    req: schemas.SchoolAddStudentRequest,
+    current_driver: Driver = Depends(get_current_driver),
+    db: Session = Depends(get_db),
+):
+    if current_driver.role != "school":
+        raise HTTPException(status_code=403, detail="School instructors only")
+    if not current_driver.organization_id:
+        raise HTTPException(status_code=400, detail="Instructor has no organization")
+    org = crud.get_organization(db, current_driver.organization_id)
+    if not org or org.status != "active":
+        raise HTTPException(status_code=400, detail="Organization not active")
+
+    phone = normalize_phone(req.phone)
+    if not phone:
+        raise HTTPException(status_code=400, detail="Invalid phone number")
+
+    student = crud.get_driver_by_phone(db, phone)
+    if not student:
+        student = models.Driver(
+            phone=phone,
+            name=req.name or None,
+            role="student",
+            is_verified=0,
+            organization_id=org.id,
+            group_tag=org.default_group_tag,
+            approved=True,
+            created_at=datetime.utcnow(),
+        )
+        db.add(student)
+        db.flush()
+    else:
+        if student.organization_id and student.organization_id != org.id:
+            raise HTTPException(status_code=409, detail="Driver already belongs to another organization")
+        student.organization_id = org.id
+        student.group_tag = org.default_group_tag
+        student.approved = True
+        if req.name and not student.name:
+            student.name = req.name
+
+    member = crud.get_org_member(db, org.id, student.id)
+    if not member:
+        member = models.OrganizationMember(
+            organization_id=org.id,
+            driver_id=student.id,
+            role="student",
+            approved=True,
+            created_at=datetime.utcnow(),
+        )
+        db.add(member)
+    else:
+        member.approved = True
+
+    db.commit()
+    db.refresh(student)
+    return {"ok": True, "student_id": student.id, "name": student.name, "phone": student.phone}
 
 
 @app.get("/terms")
