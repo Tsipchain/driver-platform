@@ -899,8 +899,9 @@ def api_create_trial(req: schemas.TrialCreateRequest, request: Request, db: Sess
         attempt.organization_id = row.id
         db.commit()
         db.refresh(row)
-    except Exception:
+    except Exception as exc:
         db.rollback()
+        logger.exception("trial_create_error company=%s email_hash=%s: %s", company_name, email_hash[:10], exc)
         crud.create_trial_attempt(
             db,
             ip_hash=ip_hash,
@@ -910,7 +911,10 @@ def api_create_trial(req: schemas.TrialCreateRequest, request: Request, db: Sess
             error_code="TRIAL_CREATE_ERROR",
         )
         db.commit()
-        raise
+        raise HTTPException(
+            status_code=500,
+            detail="Σφάλμα δημιουργίας φορέα. Παρακαλώ δοκίμασε ξανά ή επικοινώνησε με support@thronoschain.org",
+        )
 
     logger.info(
         "trial_created org_id=%s slug=%s ip_hash=%s email_hash=%s phone_hash=%s",

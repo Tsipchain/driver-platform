@@ -738,6 +738,17 @@ window.addEventListener("DOMContentLoaded", () => {
     $("btnLoadOperator")?.addEventListener("click", async () => { await loadOperatorDashboard(); await loadOperatorVoice(); await loadPendingDrivers(); await loadPendingClaims(); });
     initOperatorMap();
     applyBranding();
+    // Auto-load when redirected from landing page with token pre-set
+    if (new URLSearchParams(window.location.search).get("autoload") === "1" && getOperatorToken()) {
+      if ($("operatorAuthState")) $("operatorAuthState").textContent = "Authenticated — Loading…";
+      setTimeout(async () => {
+        await loadOperatorDashboard();
+        await loadOperatorVoice();
+        await loadPendingDrivers();
+        await loadPendingClaims();
+        if ($("operatorAuthState")) $("operatorAuthState").textContent = "Authenticated";
+      }, 300);
+    }
     return;
   }
 
