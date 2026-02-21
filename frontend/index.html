@@ -9,90 +9,264 @@
   </head>
   <body>
     <div class="app-shell">
-      <div class="card">
-        <div class="card-title">Thronos Driver Platform</div>
-        <p class="small-text">Fleet telemetry, σχολές οδήγησης, voice dispatch και rewards.</p>
-        <div class="row">
-          <a class="primary full" href="/app">Δοκιμή Taxi Fleet</a>
-          <a class="outline full" href="/school">Δοκιμή Σχολή</a>
-          <a class="outline full" href="/operator">Operator Login</a>
+
+      <!-- ── Hero ── -->
+      <div class="card" style="text-align:center;padding:28px 16px;">
+        <div style="font-size:2.4rem;margin-bottom:8px;">🔗</div>
+        <div class="card-title" style="font-size:1.05rem;letter-spacing:0.05em;color:var(--text);">
+          Thronos Driver Platform
         </div>
-        <button class="primary full" id="btnOpenTrial" style="margin-top:10px;">Ξεκίνα 14ήμερο Trial</button>
+        <p class="small-text" style="margin-top:8px;line-height:1.8;">
+          Fleet Intelligence &nbsp;·&nbsp; AI Safety Scoring &nbsp;·&nbsp; Voice Dispatch &nbsp;·&nbsp; Blockchain Rewards
+        </p>
       </div>
 
-      <div id="trialModal" class="card" style="display:none;">
-        <div class="card-header"><div class="card-title">Δημιουργία Trial Φορέα</div><button class="outline" id="btnCloseTrial">Κλείσιμο</button></div>
-        <div class="field-group"><label for="trialCompany">Company name</label><input id="trialCompany" placeholder="π.χ. Taxiway" /></div>
-        <div class="field-group"><label for="trialEmail">Contact email</label><input id="trialEmail" placeholder="ops@example.com" /></div>
-        <div class="field-group"><label for="trialPhone">Phone (optional)</label><input id="trialPhone" placeholder="69XXXXXXXX" /></div>
-        <button class="primary full" id="btnCreateTrial">Create trial</button>
-        <div id="trialMessage" class="small-text"></div>
-      </div>
-
+      <!-- ── ENTRY 1: Drivers ── -->
       <div class="card">
-        <div class="card-title">Use cases</div>
-        <ul>
-          <li>Taxi/Μεταφορικές στόλοι με live map και approvals οδηγών.</li>
-          <li>Driving schools με operator dashboard.</li>
-          <li>Transport teams με OTP login και voice μηνύματα.</li>
+        <div class="card-header">
+          <div>
+            <div style="font-size:1.5rem;line-height:1;">🚗</div>
+            <div class="card-title" style="margin-top:4px;color:var(--text);">Είσοδος Οδηγού</div>
+          </div>
+          <span class="badge">OTP</span>
+        </div>
+        <p class="small-text" style="margin-bottom:14px;line-height:1.7;">
+          Σύνδεση με κωδικό SMS. Για <strong>Taxi</strong>, <strong>Σχολή Οδήγησης</strong>,
+          <strong>Μεταφορική</strong> και ελεύθερους επαγγελματίες.
+        </p>
+        <div class="row">
+          <a class="primary full" href="/app" style="text-decoration:none;text-align:center;padding:9px 14px;border-radius:999px;font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;background:radial-gradient(circle at top left,var(--accent),#01c87b);color:#02140a;">
+            Taxi / Fleet
+          </a>
+          <a class="outline full" href="/school" style="text-decoration:none;text-align:center;padding:9px 14px;border-radius:999px;font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;border:1px solid #28374a;color:var(--muted);">
+            Σχολή / Εκπαιδευτής
+          </a>
+        </div>
+        <p class="small-text" style="margin-top:10px;font-size:10px;">
+          Αν ανήκεις σε φορέα (σχολή, μεταφορική, taxi fleet) συνδέσου με το κινητό σου και ο φορέας σου εντοπίζεται αυτόματα.
+        </p>
+      </div>
+
+      <!-- ── ENTRY 2: Operator ── -->
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div style="font-size:1.5rem;line-height:1;">🏢</div>
+            <div class="card-title" style="margin-top:4px;color:var(--text);">Operator Dashboard</div>
+          </div>
+          <span class="badge">Admin</span>
+        </div>
+        <p class="small-text" style="margin-bottom:14px;line-height:1.7;">
+          Διαχείριση στόλου, live map, AI stats, φωνητικά μηνύματα, εγκρίσεις οδηγών, pending claims, rewards.
+          Απαιτείται <strong>Operator Token</strong>.
+        </p>
+        <button class="primary full" id="btnGotoOperator">Είσοδος με Operator Token</button>
+        <div id="operatorEntryMsg" class="small-text" style="margin-top:6px;"></div>
+      </div>
+
+      <!-- Operator token modal -->
+      <div id="operatorEntryModal" class="card" style="display:none;border-color:var(--accent);">
+        <div class="card-header">
+          <div class="card-title" style="color:var(--text);">Operator Token</div>
+          <button class="outline" id="btnCloseOperatorEntry">✕</button>
+        </div>
+        <p class="small-text" style="margin-bottom:10px;line-height:1.6;">
+          Εισήγαγε τον operator token του φορέα σου. Ο κωδικός δημιουργείται από τον διαχειριστή μέσω του API.
+        </p>
+        <div class="field-group">
+          <label for="entryOperatorToken">Operator Token</label>
+          <input id="entryOperatorToken" type="password" placeholder="tok_…" autocomplete="off" />
+        </div>
+        <button class="primary full" id="btnSubmitOperatorEntry">Είσοδος στο Dashboard</button>
+      </div>
+
+      <!-- ── ENTRY 3: Trial ── -->
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div style="font-size:1.5rem;line-height:1;">🆕</div>
+            <div class="card-title" style="margin-top:4px;color:var(--text);">Νέος Φορέας — 14 Ημέρες Δωρεάν</div>
+          </div>
+          <span class="badge">Free</span>
+        </div>
+        <p class="small-text" style="margin-bottom:14px;line-height:1.7;">
+          Δημιούργησε τον <strong>δικό σου φορέα</strong> (Taxi fleet, Σχολή Οδήγησης, Μεταφορική)
+          χωρίς κάρτα. Το trial ξεκινά αμέσως.
+        </p>
+        <button class="outline full" id="btnOpenTrial">Ξεκίνα 14ήμερο Trial</button>
+      </div>
+
+      <!-- Trial form modal -->
+      <div id="trialModal" class="card" style="display:none;border-color:var(--accent);">
+        <div class="card-header">
+          <div class="card-title" style="color:var(--text);">Δημιουργία Trial Φορέα</div>
+          <button class="outline" id="btnCloseTrial">✕</button>
+        </div>
+        <div class="field-group">
+          <label for="trialCompany">Όνομα φορέα *</label>
+          <input id="trialCompany" placeholder="π.χ. Taxiway Athens" />
+        </div>
+        <div class="field-group">
+          <label for="trialType">Τύπος φορέα *</label>
+          <select id="trialType">
+            <option value="taxi">🚕 Taxi / Fleet</option>
+            <option value="school">🏫 Σχολή Οδήγησης</option>
+            <option value="transport">🚚 Μεταφορική</option>
+            <option value="drone">🚁 Drone Operations</option>
+          </select>
+        </div>
+        <div class="field-group">
+          <label for="trialEmail">Email επικοινωνίας *</label>
+          <input id="trialEmail" type="email" placeholder="ops@example.com" />
+        </div>
+        <div class="field-group">
+          <label for="trialPhone">Κινητό (προαιρετικό)</label>
+          <input id="trialPhone" placeholder="69XXXXXXXX" />
+        </div>
+        <button class="primary full" id="btnCreateTrial">Δημιουργία Trial</button>
+        <div id="trialMessage" class="small-text" style="margin-top:8px;"></div>
+      </div>
+
+      <!-- Trial success card -->
+      <div id="trialSuccess" class="card" style="display:none;border-color:var(--accent);">
+        <div style="font-size:1.5rem;margin-bottom:6px;">✅</div>
+        <div class="card-title" style="color:var(--accent);margin-bottom:10px;">Ο φορέας δημιουργήθηκε!</div>
+        <div id="trialSuccessDetails" class="small-text" style="line-height:2;"></div>
+        <div class="row" style="margin-top:14px;">
+          <a id="trialLinkApp" class="primary full" href="/app" style="text-decoration:none;text-align:center;padding:9px 14px;border-radius:999px;font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;background:radial-gradient(circle at top left,var(--accent),#01c87b);color:#02140a;">
+            Σύνδεση Οδηγών
+          </a>
+          <a class="outline full" href="/operator" style="text-decoration:none;text-align:center;padding:9px 14px;border-radius:999px;font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;border:1px solid #28374a;color:var(--muted);">
+            Operator Panel
+          </a>
+        </div>
+      </div>
+
+      <!-- ── Features ── -->
+      <div class="card">
+        <div class="card-title">Τι προσφέρει η πλατφόρμα</div>
+        <ul style="margin:10px 0 0;padding-left:1.2rem;line-height:2.2;" class="small-text">
+          <li>Taxi/Μεταφορικές στόλοι με live map και approvals οδηγών</li>
+          <li>Σχολές οδήγησης — εκπαιδευτές &amp; μαθητές, scoreboard</li>
+          <li>AI scoring ασφάλειας (φρενάρισμα, ταχύτητα, στροφές)</li>
+          <li>Voice CB — αμφίδρομη φωνητική επικοινωνία dispatcher ↔ οδηγός</li>
+          <li>Transport marketplace για ελεύθερους επαγγελματίες</li>
+          <li>Thronos Chain rewards για οδηγούς υψηλής απόδοσης</li>
+          <li>Fatigue detection &amp; driver alert system (coming soon)</li>
         </ul>
       </div>
 
+      <!-- ── Pricing ── -->
       <div class="card">
         <div class="card-title">Pricing</div>
         <div id="plansHost" class="small-text">Loading plans…</div>
       </div>
+
+      <footer class="card" style="text-align:center;">
+        <span class="small-text">
+          <a href="/terms">Terms of Service</a> &nbsp;|&nbsp;
+          <a href="/privacy">Privacy Policy</a> &nbsp;|&nbsp;
+          <a href="/refund">Refund Policy</a> &nbsp;|&nbsp;
+          <a href="mailto:support@thronoschain.org">support@thronoschain.org</a>
+        </span>
+      </footer>
     </div>
 
-    <footer class="card" style="text-align:center;">
-      <span class="small-text">
-        <a href="/terms">Terms of Service</a> &nbsp;|&nbsp;
-        <a href="/privacy">Privacy Policy</a> &nbsp;|&nbsp;
-        <a href="/refund">Refund Policy</a> &nbsp;|&nbsp;
-        <a href="mailto:support@thronoschain.org">support@thronoschain.org</a>
-      </span>
-    </footer>
-
     <script>
+      const TYPE_LABELS = { taxi: 'Taxi / Fleet', school: 'Σχολή Οδήγησης', transport: 'Μεταφορική', drone: 'Drone Operations' };
+
       async function loadPlans() {
         try {
           const r = await fetch('/api/plans');
+          if (!r.ok) throw new Error();
           const data = await r.json();
           const plans = data.plans || {};
-          const html = Object.entries(plans).map(([k, v]) => `
-            <div style="margin-bottom:10px;">
-              <strong>${k.toUpperCase()}</strong> — ${(v.features || []).join(', ')}
-            </div>`).join('');
-          document.getElementById('plansHost').innerHTML = html || 'No plans';
+          const html = Object.entries(plans).map(([k, v]) =>
+            `<div style="margin-bottom:10px;">
+              <strong style="color:var(--text);">${k.toUpperCase()}</strong>
+              — ${(v.features || []).join(', ')}
+            </div>`
+          ).join('');
+          document.getElementById('plansHost').innerHTML = html || 'No plans available';
         } catch (_) {
           document.getElementById('plansHost').textContent = 'Plans unavailable';
         }
       }
 
       async function createTrial() {
+        const btn = document.getElementById('btnCreateTrial');
+        const msg = document.getElementById('trialMessage');
         const payload = {
           company_name: document.getElementById('trialCompany').value.trim(),
           contact_email: document.getElementById('trialEmail').value.trim(),
           phone: document.getElementById('trialPhone').value.trim() || null,
-          type: 'taxi'
+          type: document.getElementById('trialType').value,
         };
-        const msg = document.getElementById('trialMessage');
-        const resp = await fetch('/api/trials/create', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-        const data = await resp.json().catch(() => ({}));
-        if (!resp.ok) {
-          msg.textContent = data.detail || 'Trial creation failed';
-          return;
+        if (!payload.company_name) { msg.textContent = 'Εισήγαγε όνομα φορέα.'; return; }
+        if (!payload.contact_email || !payload.contact_email.includes('@')) { msg.textContent = 'Εισήγαγε έγκυρο email.'; return; }
+
+        btn.disabled = true;
+        btn.textContent = 'Δημιουργία…';
+        msg.textContent = '';
+        try {
+          const resp = await fetch('/api/trials/create', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          const data = await resp.json().catch(() => ({}));
+          if (resp.status === 429) {
+            const sec = data.retry_after || 900;
+            msg.textContent = `Όριο δοκιμών. Δοκίμασε ξανά σε ${Math.ceil(sec/60)} λεπτά.`;
+            return;
+          }
+          if (!resp.ok) {
+            msg.textContent = data.detail || `Σφάλμα (${resp.status}). Επικοινώνησε με support@thronoschain.org`;
+            return;
+          }
+          // Success
+          document.getElementById('trialModal').style.display = 'none';
+          const card = document.getElementById('trialSuccess');
+          card.style.display = 'block';
+          document.getElementById('trialSuccessDetails').innerHTML =
+            `<div><strong>Φορέας:</strong> ${data.name}</div>
+             <div><strong>Τύπος:</strong> ${TYPE_LABELS[payload.type] || payload.type}</div>
+             <div><strong>Group tag:</strong> <code>${data.group_tag}</code></div>
+             <div><strong>Trial λήγει:</strong> ${data.trial_ends_at ? data.trial_ends_at.split('T')[0] : '+14 ημέρες'}</div>
+             <div style="margin-top:8px;">Δημιούργησε operator token μέσω του API και ξεκίνα να διαχειρίζεσαι τον στόλο σου.</div>`;
+          card.scrollIntoView({ behavior: 'smooth' });
+        } catch (_) {
+          msg.textContent = 'Σφάλμα σύνδεσης. Δοκίμασε ξανά.';
+        } finally {
+          btn.disabled = false;
+          btn.textContent = 'Δημιουργία Trial';
         }
-        msg.textContent = `Ο φορέας σου δημιουργήθηκε: ${payload.company_name} (group: ${data.group_tag})`;
       }
 
-      document.getElementById('btnOpenTrial').onclick = () => document.getElementById('trialModal').style.display = 'block';
+      function submitOperatorEntry() {
+        const token = document.getElementById('entryOperatorToken').value.trim();
+        const msg = document.getElementById('operatorEntryMsg');
+        if (!token) { msg.textContent = 'Εισήγαγε τον operator token σου.'; return; }
+        localStorage.setItem('operator_token', token);
+        window.location.href = '/operator?autoload=1';
+      }
+
+      // Events
+      document.getElementById('btnOpenTrial').onclick = () => {
+        document.getElementById('trialModal').style.display = 'block';
+        document.getElementById('trialModal').scrollIntoView({ behavior: 'smooth' });
+      };
       document.getElementById('btnCloseTrial').onclick = () => document.getElementById('trialModal').style.display = 'none';
       document.getElementById('btnCreateTrial').onclick = createTrial;
+
+      document.getElementById('btnGotoOperator').onclick = () => {
+        document.getElementById('operatorEntryModal').style.display = 'block';
+        document.getElementById('operatorEntryModal').scrollIntoView({ behavior: 'smooth' });
+      };
+      document.getElementById('btnCloseOperatorEntry').onclick = () => document.getElementById('operatorEntryModal').style.display = 'none';
+      document.getElementById('btnSubmitOperatorEntry').onclick = submitOperatorEntry;
+      document.getElementById('entryOperatorToken').addEventListener('keydown', e => { if (e.key === 'Enter') submitOperatorEntry(); });
+
       loadPlans();
     </script>
   </body>
