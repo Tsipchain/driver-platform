@@ -49,6 +49,11 @@ def get_or_create_driver_by_phone(
     organization_id: Optional[int] = None,
 ) -> models.Driver:
     driver = get_driver_by_phone(db, phone)
+    # Email-based dedup: if phone not found but email matches an existing driver, reuse it
+    if not driver and email:
+        driver = db.query(models.Driver).filter(models.Driver.email == email).first()
+        if driver:
+            driver.phone = phone  # update to new phone number
     if driver:
         if email and not driver.email:
             driver.email = email
@@ -257,9 +262,11 @@ def list_recent_voice_messages(db: Session, limit: int = 20) -> List[models.Voic
     )
 
 
-def get_operator_dashboard(db: Session, group_tag: Optional[str] = None) -> dict:
+def get_operator_dashboard(db: Session, group_tag: Optional[str] = None, organization_id: Optional[int] = None) -> dict:
     q = db.query(models.Driver)
-    if group_tag:
+    if organization_id:
+        q = q.filter(models.Driver.organization_id == organization_id)
+    elif group_tag:
         q = q.filter(models.Driver.group_tag == group_tag)
     drivers = q.order_by(models.Driver.id.desc()).all()
 
@@ -304,6 +311,10 @@ def get_operator_dashboard(db: Session, group_tag: Optional[str] = None) -> dict
                 "phone": d.phone,
                 "company_name": d.company_name,
                 "group_tag": d.group_tag,
+                "approved": bool(d.approved),
+                "created_at": d.created_at.isoformat() if d.created_at else None,
+                "last_login_at": d.last_login_at.isoformat() if d.last_login_at else None,
+                "kyc_status": d.kyc_status,
                 "last_trip_status": last_trip_status,
                 "last_telemetry": (
                     {
@@ -398,6 +409,18 @@ def get_organization(db: Session, organization_id: int) -> Optional[models.Organ
 def get_org_member(db: Session, organization_id: int, driver_id: int) -> Optional[models.OrganizationMember]:
     return db.query(models.OrganizationMember).filter(models.OrganizationMember.organization_id == organization_id, models.OrganizationMember.driver_id == driver_id).first()
 
+
+def delete_driver(db: Session, driver_id: int) -> bool:
+    driver = get_driver(db, driver_id)
+    if not driver:
+        return False
+    # Delete related rows not covered by cascade
+    db.query(models.OrganizationMember).filter(models.OrganizationMember.driver_id == driver_id).delete()
+    db.query(models.AssignmentClaim).filter(models.AssignmentClaim.driver_id == driver_id).delete()
+    db.query(models.RewardEvent).filter(models.RewardEvent.driver_id == driver_id).delete()
+    db.delete(driver)
+    db.commit()
+    return True
 
 
 def create_trial_attempt(

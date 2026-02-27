@@ -546,6 +546,9 @@ def request_code(req: schemas.AuthRequestCode, db: Session = Depends(get_db)):
         group_tag=None,
         organization_id=req.organization_id,
     )
+    # Auto-approve free professionals (no org) so they can work without waiting
+    if not req.organization_id and not driver.organization_id:
+        driver.approved = True
     if req.organization_id:
         org = crud.get_organization(db, int(req.organization_id))
         if not org or org.status != "active":
@@ -660,6 +663,7 @@ def me(current_driver: Driver = Depends(get_current_driver), db: Session = Depen
         "org_type": org.type if org else None,
         "org_name": org.name if org else None,
         "approved": bool(current_driver.approved),
+        "kyc_status": current_driver.kyc_status,
         "company_name": current_driver.company_name,
         "stats": {
             "trips": crud.count_driver_trips(db, current_driver.id),
@@ -1053,10 +1057,8 @@ def api_operator_dashboard(
 ):
     forced_group, forced_org = _resolve_operator_scope(db, x_admin_token)
     if forced_org:
-        org = crud.get_organization(db, forced_org)
-        effective_group = (org.default_group_tag if org else None) or forced_group
-    else:
-        effective_group = forced_group or group_tag
+        return crud.get_operator_dashboard(db, organization_id=forced_org)
+    effective_group = forced_group or group_tag
     return crud.get_operator_dashboard(db, group_tag=effective_group)
 
 
@@ -1074,7 +1076,18 @@ def api_operator_pending_drivers(
     if effective_group:
         q = q.filter(models.Driver.group_tag == effective_group)
     rows = q.order_by(models.Driver.created_at.desc()).limit(200).all()
-    return {"items": [{"id": d.id, "name": d.name, "phone": d.phone, "group_tag": d.group_tag, "approved": bool(d.approved)} for d in rows]}
+    return {"items": [
+        {
+            "id": d.id,
+            "name": d.name,
+            "phone": d.phone,
+            "group_tag": d.group_tag,
+            "approved": bool(d.approved),
+            "created_at": d.created_at.isoformat() if d.created_at else None,
+            "kyc_status": d.kyc_status,
+        }
+        for d in rows
+    ]}
 
 
 @app.post("/api/operator/drivers/{driver_id}/approve")
@@ -1096,6 +1109,42 @@ def api_operator_approve_driver(
     driver.approved = True
     db.commit()
     return {"ok": True, "driver_id": driver.id, "approved": True}
+
+
+@app.delete("/api/operator/drivers/{driver_id}")
+def api_operator_delete_driver(
+    driver_id: int,
+    x_admin_token: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    forced_group, forced_org = _resolve_operator_scope(db, x_admin_token)
+    driver = crud.get_driver(db, driver_id)
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+    if forced_org and driver.organization_id != forced_org:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    crud.delete_driver(db, driver_id)
+    return {"ok": True, "deleted": driver_id}
+
+
+@app.post("/api/operator/drivers/{driver_id}/kyc")
+def api_operator_kyc_update(
+    driver_id: int,
+    req: schemas.KycUpdateRequest,
+    x_admin_token: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    forced_group, forced_org = _resolve_operator_scope(db, x_admin_token)
+    driver = crud.get_driver(db, driver_id)
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+    if forced_org and driver.organization_id != forced_org:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    driver.kyc_status = req.status
+    if req.status == "verified":
+        driver.kyc_verified_at = datetime.utcnow()
+    db.commit()
+    return {"ok": True, "driver_id": driver_id, "kyc_status": req.status}
 
 
 @app.get("/api/operator/events/recent")

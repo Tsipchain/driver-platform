@@ -1,5 +1,71 @@
 const API_BASE = window.location.origin;
 
+// ── i18n ──────────────────────────────────────────────────────────────────────
+const LANG_DICT = {
+  el: {
+    login_title: "Σύνδεση οδηγού",
+    login_subtitle: "Passwordless login με κινητό",
+    phone_label: "Κινητό τηλέφωνο",
+    email_label: "Email (προαιρετικό)",
+    name_label: "Όνομα (προαιρετικό)",
+    org_label: "Φορέας (προαιρετικό)",
+    send_code: "Αποστολή κωδικού",
+    code_label: "Κωδικός 6 ψηφίων",
+    verify_btn: "Επιβεβαίωση",
+    col_name: "Όνομα / Τηλέφωνο",
+    col_status: "Κατάσταση",
+    col_created: "Εγγραφή",
+    col_last_login: "Τελ. Σύνδεση",
+    col_kyc: "KYC",
+    col_actions: "Ενέργειες",
+    approve: "APPROVE",
+    delete_btn: "Διαγραφή",
+    kyc_verified: "KYC ✓",
+    kyc_pending: "Verify KYC",
+    kyc_mark_ok: "✓ Mark OK",
+    no_data: "Χωρίς δεδομένα",
+  },
+  de: {
+    login_title: "Fahrer-Anmeldung",
+    login_subtitle: "Passwortfreie Anmeldung per Handy",
+    phone_label: "Handynummer",
+    email_label: "E-Mail (optional)",
+    name_label: "Name (optional)",
+    org_label: "Organisation (optional)",
+    send_code: "Code senden",
+    code_label: "6-stelliger Code",
+    verify_btn: "Bestätigen",
+    col_name: "Name / Telefon",
+    col_status: "Status",
+    col_created: "Registriert",
+    col_last_login: "Letzter Login",
+    col_kyc: "KYC",
+    col_actions: "Aktionen",
+    approve: "GENEHMIGEN",
+    delete_btn: "Löschen",
+    kyc_verified: "KYC ✓",
+    kyc_pending: "KYC prüfen",
+    kyc_mark_ok: "✓ Bestätigen",
+    no_data: "Keine Daten",
+  },
+};
+function getLang() { return localStorage.getItem("lang") || "el"; }
+function t(key) { return (LANG_DICT[getLang()] || LANG_DICT.el)[key] || key; }
+function applyLang() {
+  document.querySelectorAll("[data-i18n]").forEach(el => {
+    const key = el.getAttribute("data-i18n");
+    if (el.tagName === "BUTTON" || el.tagName === "LABEL" || el.tagName === "DIV" || el.tagName === "SPAN") {
+      el.textContent = t(key);
+    }
+  });
+  const btn = document.getElementById("btnLangToggle");
+  if (btn) btn.textContent = getLang() === "el" ? "DE" : "EL";
+}
+function toggleLang() {
+  localStorage.setItem("lang", getLang() === "el" ? "de" : "el");
+  applyLang();
+}
+
 let requestCodeCooldownTimer = null;
 let requestCodeCooldownLeft = 0;
 let mediaRecorder = null;
@@ -518,6 +584,40 @@ function initOperatorMap() {
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "&copy; OpenStreetMap" }).addTo(operatorMap);
 }
 
+function kycBadge(driverId, kycStatus) {
+  if (kycStatus === "verified") {
+    return `<span style="color:var(--accent);font-weight:600;">${t("kyc_verified")}</span>`;
+  }
+  return `<a href="https://verifyid.thronoschain.org/?driver_id=${driverId}" target="_blank" rel="noopener" style="font-size:10px;opacity:0.8;">${t("kyc_pending")}</a>` +
+    ` <button class="outline" style="padding:2px 5px;font-size:10px;" onclick="approveKyc(${driverId})">${t("kyc_mark_ok")}</button>`;
+}
+
+async function deleteDriver(driverId) {
+  if (!confirm(`${t("delete_btn")} driver #${driverId}?`)) return;
+  const token = getOperatorToken();
+  const resp = await fetch(`${API_BASE}/api/operator/drivers/${driverId}`, {
+    method: "DELETE",
+    headers: { "X-Admin-Token": token },
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    return toast(err.detail || "Delete failed");
+  }
+  await loadOperatorDashboard();
+  await loadPendingDrivers();
+}
+
+async function approveKyc(driverId) {
+  const token = getOperatorToken();
+  const resp = await fetch(`${API_BASE}/api/operator/drivers/${driverId}/kyc`, {
+    method: "POST",
+    headers: { "X-Admin-Token": token, "Content-Type": "application/json" },
+    body: JSON.stringify({ status: "verified" }),
+  });
+  if (!resp.ok) return toast("KYC update failed");
+  await loadOperatorDashboard();
+}
+
 function renderOperatorData(data) {
   initOperatorMap();
   if (operatorMap) {
@@ -526,16 +626,34 @@ function renderOperatorData(data) {
   }
 
   const rows = (data.drivers || []).map((d) => {
-    const t = d.last_telemetry || {};
-    if (operatorMap && t.lat && t.lng) {
-      const marker = L.marker([t.lat, t.lng]).addTo(operatorMap).bindPopup(`${d.name || d.phone} (${d.last_trip_status})`);
+    const tel = d.last_telemetry || {};
+    if (operatorMap && tel.lat && tel.lng) {
+      const marker = L.marker([tel.lat, tel.lng]).addTo(operatorMap).bindPopup(`${d.name || d.phone} (${d.last_trip_status})`);
       operatorMarkers.push(marker);
     }
-    return `<tr><td>${d.name || d.phone || '-'}</td><td>${d.last_trip_status || '-'}</td><td>${t.speed ?? '-'}</td><td>${t.timestamp || '-'}</td></tr>`;
+    const created = d.created_at ? d.created_at.split("T")[0] : "-";
+    const lastLogin = d.last_login_at ? d.last_login_at.split("T")[0] : "-";
+    const kyc = kycBadge(d.id, d.kyc_status);
+    const approvedBadge = d.approved ? "" : ` <span style="opacity:0.5;font-size:10px;">(pending)</span>`;
+    return `<tr>
+      <td>${d.name || "-"}${approvedBadge}<br><small style="opacity:0.6">${d.phone || ""}</small></td>
+      <td>${d.last_trip_status || "-"}</td>
+      <td>${created}</td>
+      <td>${lastLogin}</td>
+      <td>${kyc}</td>
+      <td><button class="outline" style="padding:2px 6px;font-size:10px;color:#ff6b6b;" onclick="deleteDriver(${d.id})">${t("delete_btn")}</button></td>
+    </tr>`;
   }).join("");
 
-  $("operatorMeta").textContent = `${isSchoolMode() ? 'Active lessons' : 'Active drivers'}: ${data.active_drivers || 0}`;
-  $("operatorTable").innerHTML = `<table style="width:100%;font-size:12px;"><thead><tr><th>Name</th><th>Status</th><th>Speed</th><th>Last ts</th></tr></thead><tbody>${rows || '<tr><td colspan="4">No data</td></tr>'}</tbody></table>`;
+  $("operatorMeta").textContent = `${isSchoolMode() ? "Active lessons" : "Active drivers"}: ${data.active_drivers || 0}`;
+  $("operatorTable").innerHTML = `<table style="width:100%;font-size:12px;border-collapse:collapse;"><thead><tr style="text-align:left;border-bottom:1px solid rgba(255,255,255,0.15);">
+    <th style="padding:4px 6px;">${t("col_name")}</th>
+    <th style="padding:4px 6px;">${t("col_status")}</th>
+    <th style="padding:4px 6px;">${t("col_created")}</th>
+    <th style="padding:4px 6px;">${t("col_last_login")}</th>
+    <th style="padding:4px 6px;">${t("col_kyc")}</th>
+    <th style="padding:4px 6px;">${t("col_actions")}</th>
+  </tr></thead><tbody>${rows || `<tr><td colspan="6" style="padding:8px 6px;opacity:0.5;">${t("no_data")}</td></tr>`}</tbody></table>`;
 }
 
 function getOperatorToken() {
@@ -695,14 +813,24 @@ async function loadPendingDrivers() {
   const data = await resp.json();
   const host = $("operatorPendingList");
   if (!host) return;
-  host.innerHTML = (data.items || []).map(d => `<div style="margin:8px 0;">${d.name || d.phone} (${d.group_tag || '-'}) <button class="outline" data-approve="${d.id}">Approve</button></div>`).join("") || "No pending drivers";
+  const items = data.items || [];
+  host.innerHTML = items.map(d => {
+    const date = d.created_at ? d.created_at.split("T")[0] : "";
+    const kyc = d.kyc_status === "verified" ? ` <span style="color:var(--accent);font-size:10px;">KYC✓</span>` : "";
+    return `<div style="margin:8px 0;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+      <span>${d.name || d.phone}${kyc}</span>
+      <small style="opacity:0.5;">${d.phone || ""} ${date ? "· " + date : ""}</small>
+      <button class="outline" style="padding:2px 8px;font-size:10px;" data-approve="${d.id}">${t("approve")}</button>
+      <button class="outline" style="padding:2px 8px;font-size:10px;color:#ff6b6b;" data-del="${d.id}">${t("delete_btn")}</button>
+    </div>`;
+  }).join("") || "No pending drivers";
   host.querySelectorAll("button[data-approve]").forEach((btn) => btn.onclick = async () => {
     const id = btn.getAttribute("data-approve");
     const r = await fetch(`${API_BASE}/api/operator/drivers/${id}/approve`, { method: "POST", headers: { "X-Admin-Token": token } });
-    if (r.ok) {
-      await loadPendingDrivers();
-      await loadOperatorDashboard();
-    }
+    if (r.ok) { await loadPendingDrivers(); await loadOperatorDashboard(); }
+  });
+  host.querySelectorAll("button[data-del]").forEach((btn) => btn.onclick = async () => {
+    await deleteDriver(btn.getAttribute("data-del"));
   });
 }
 
@@ -724,6 +852,7 @@ async function loadPendingClaims() {
 }
 
 window.addEventListener("DOMContentLoaded", () => {
+  applyLang();
   renderAuthState();
   updateRequestCodeButton();
   loadOrganizations();
