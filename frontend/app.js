@@ -24,6 +24,15 @@ const LANG_DICT = {
     kyc_pending: "Verify KYC",
     kyc_mark_ok: "✓ Mark OK",
     no_data: "Χωρίς δεδομένα",
+    save: "Αποθήκευση",
+    marketplace_title: "Marketplace δρομολογίων",
+    marketplace_desc: "Εμφανίσου στους φορείς ως ελεύθερος οδηγός και ανάλαβε ανοιχτά δρομολόγια.",
+    marketplace_optin: "Είμαι διαθέσιμος στο marketplace",
+    marketplace_city: "Πόλη σου",
+    marketplace_open_jobs: "Ανοιχτά δρομολόγια:",
+    marketplace_claim: "Ανάληψη",
+    marketplace_claimed: "Στάλθηκε αίτηση",
+    marketplace_no_jobs: "Δεν υπάρχουν ανοιχτά δρομολόγια.",
   },
   de: {
     login_title: "Fahrer-Anmeldung",
@@ -47,6 +56,15 @@ const LANG_DICT = {
     kyc_pending: "KYC prüfen",
     kyc_mark_ok: "✓ Bestätigen",
     no_data: "Keine Daten",
+    save: "Speichern",
+    marketplace_title: "Auftrag-Marktplatz",
+    marketplace_desc: "Erscheine bei Organisationen als freier Fahrer und übernimm offene Aufträge.",
+    marketplace_optin: "Ich bin verfügbar im Marktplatz",
+    marketplace_city: "Deine Stadt",
+    marketplace_open_jobs: "Offene Aufträge:",
+    marketplace_claim: "Übernehmen",
+    marketplace_claimed: "Anfrage gesendet",
+    marketplace_no_jobs: "Keine offenen Aufträge.",
   },
 };
 function getLang() { return localStorage.getItem("lang") || "el"; }
@@ -335,6 +353,9 @@ async function enrichDriverProfile() {
     const profile = JSON.parse(localStorage.getItem("driverProfile") || "{}");
     profile.org_type = me.org_type || null;
     profile.org_name = me.org_name || null;
+    profile.organization_id = me.organization_id || null;
+    profile.marketplace_opt_in = !!me.marketplace_opt_in;
+    profile.city = me.city || null;
     localStorage.setItem("driverProfile", JSON.stringify(profile));
   } catch (_) {}
 }
@@ -348,6 +369,17 @@ function afterLoginSetup() {
       loadStudents();
     } else {
       studentsCard.style.display = "none";
+    }
+  }
+  // Marketplace card: visible for taxi free professionals (no organization)
+  const mkCard = $("marketplaceCard");
+  if (mkCard) {
+    const isFreePro = !profile.organization_id && (profile.role === "taxi" || !profile.role);
+    mkCard.style.display = isFreePro ? "block" : "none";
+    if (isFreePro) {
+      if ($("marketplaceOptIn")) $("marketplaceOptIn").checked = !!profile.marketplace_opt_in;
+      if ($("marketplaceCity")) $("marketplaceCity").value = profile.city || "";
+      loadMarketplace();
     }
   }
 }
@@ -372,6 +404,61 @@ async function loadStudents() {
       </div>`
     ).join('');
   } catch (_) {}
+}
+
+async function loadMarketplace() {
+  const list = $("marketplaceList");
+  if (!list) return;
+  list.textContent = "…";
+  try {
+    const resp = await apiFetch("/api/driver/marketplace/assignments", { skipUnauthorizedRedirect: true });
+    if (!resp.ok) { list.textContent = t("marketplace_no_jobs"); return; }
+    const items = await resp.json();
+    if (!items.length) { list.textContent = t("marketplace_no_jobs"); return; }
+    list.innerHTML = items.map(a => {
+      const from = a.origin_city || "?";
+      const to = a.dest_city || "?";
+      const when = a.depart_at ? new Date(a.depart_at).toLocaleString("el-GR", { dateStyle: "short", timeStyle: "short" }) : "—";
+      return `<div style="padding:8px;margin:5px 0;background:rgba(255,255,255,0.05);border-radius:6px;">
+        <div><strong>${from}</strong> → <strong>${to}</strong> &nbsp;|&nbsp; ${when}</div>
+        ${a.notes ? `<div class="small-text" style="margin-top:2px;opacity:0.7;">${a.notes}</div>` : ""}
+        <button class="outline" style="margin-top:6px;font-size:12px;padding:4px 10px;"
+          onclick="claimAssignment(${a.id}, this)">${t("marketplace_claim")}</button>
+      </div>`;
+    }).join("");
+  } catch (_) { list.textContent = t("marketplace_no_jobs"); }
+}
+
+async function claimAssignment(assignmentId, btn) {
+  btn.disabled = true;
+  btn.textContent = "…";
+  const resp = await apiFetch(`/api/driver/assignments/${assignmentId}/claim`, { method: "POST" });
+  if (resp.ok) {
+    btn.textContent = t("marketplace_claimed");
+    toast(t("marketplace_claimed"));
+  } else {
+    const err = await resp.json().catch(() => ({}));
+    toast(err.detail || "Αποτυχία.");
+    btn.disabled = false;
+    btn.textContent = t("marketplace_claim");
+  }
+}
+
+async function saveMarketplaceOptIn() {
+  const opt_in = $("marketplaceOptIn")?.checked ?? false;
+  const city = $("marketplaceCity")?.value.trim() || null;
+  const msg = $("marketplaceSaveMsg");
+  const resp = await apiFetch("/api/me/marketplace", {
+    method: "POST",
+    body: JSON.stringify({ opt_in, city }),
+  });
+  if (resp.ok) {
+    if (msg) { msg.textContent = "✓ Αποθηκεύτηκε"; setTimeout(() => { if (msg) msg.textContent = ""; }, 2000); }
+    // refresh marketplace list if opted in
+    if (opt_in) loadMarketplace();
+  } else {
+    if (msg) msg.textContent = "Σφάλμα αποθήκευσης.";
+  }
 }
 
 async function addStudent() {
@@ -1028,6 +1115,9 @@ window.addEventListener("DOMContentLoaded", () => {
   // School student management
   $("btnAddStudent")?.addEventListener("click", addStudent);
   $("btnRefreshStudents")?.addEventListener("click", loadStudents);
+  // Marketplace (free professionals)
+  $("btnSaveMarketplace")?.addEventListener("click", saveMarketplaceOptIn);
+  $("btnRefreshMarketplace")?.addEventListener("click", loadMarketplace);
   // Restore students card & CB inbox if already logged in
   if (getToken()) {
     afterLoginSetup();

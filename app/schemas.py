@@ -301,3 +301,10 @@ class BillingStatus(BaseModel):
     trial_ends_at: Optional[datetime] = None
     trial_days_remaining: Optional[int] = None
     trial_expired: bool = False
+
+
+class MarketplaceOptInRequest(BaseModel):
+    opt_in: bool = True
+    country_code: Optional[str] = None
+    region_code: Optional[str] = None
+    city: Optional[str] = None

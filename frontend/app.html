@@ -82,6 +82,28 @@
           <div class="row" style="margin-top:8px;"><button class="primary full" id="btnVoiceRecord">Start Voice</button><button class="outline full" id="btnVoiceStop" disabled>Stop & Send</button></div>
         </div>
 
+        <!-- Free professional: marketplace opt-in + open assignments (hidden for org members) -->
+        <div class="card" id="marketplaceCard" style="display:none;">
+          <div class="card-header">
+            <div class="card-title" data-i18n="marketplace_title">Marketplace δρομολογίων</div>
+            <button class="outline" id="btnRefreshMarketplace">↻</button>
+          </div>
+          <div class="small-text" data-i18n="marketplace_desc" style="margin-bottom:10px;">Εμφανίσου στους φορείς ως ελεύθερος οδηγός και ανάλαβε ανοιχτά δρομολόγια.</div>
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+              <input type="checkbox" id="marketplaceOptIn" />
+              <span class="small-text" data-i18n="marketplace_optin">Είμαι διαθέσιμος στο marketplace</span>
+            </label>
+          </div>
+          <div class="row" style="gap:8px;margin-bottom:10px;">
+            <div class="field-group" style="flex:1;margin:0;"><label for="marketplaceCity" data-i18n="marketplace_city">Πόλη σου</label><input id="marketplaceCity" placeholder="π.χ. Αθήνα" /></div>
+            <button class="outline" id="btnSaveMarketplace" style="align-self:flex-end;" data-i18n="save">Αποθήκευση</button>
+          </div>
+          <div class="small-text" id="marketplaceSaveMsg"></div>
+          <div style="margin-top:12px;"><strong class="small-text" data-i18n="marketplace_open_jobs">Ανοιχτά δρομολόγια:</strong></div>
+          <div id="marketplaceList" class="small-text" style="margin-top:6px;">-</div>
+        </div>
+
         <!-- School instructor: student management (hidden for other roles) -->
         <div class="card" id="studentsCard" style="display:none;">
           <div class="card-header">

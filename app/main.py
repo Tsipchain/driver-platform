@@ -665,6 +665,10 @@ def me(current_driver: Driver = Depends(get_current_driver), db: Session = Depen
         "approved": bool(current_driver.approved),
         "kyc_status": current_driver.kyc_status,
         "company_name": current_driver.company_name,
+        "marketplace_opt_in": bool(current_driver.marketplace_opt_in),
+        "city": current_driver.city,
+        "country_code": current_driver.country_code,
+        "region_code": current_driver.region_code,
         "stats": {
             "trips": crud.count_driver_trips(db, current_driver.id),
             "telemetry": crud.count_driver_telemetry(db, current_driver.id),
@@ -1707,6 +1711,57 @@ def api_operator_pending_claims(
         q = q.filter(models.Assignment.organization_id == forced_org)
     rows = q.order_by(models.AssignmentClaim.created_at.desc()).all()
     return {"items": [{"claim_id": c.id, "assignment_id": a.id, "driver_id": c.driver_id, "status": c.status, "created_at": c.created_at} for c, a in rows]}
+
+
+@app.post("/api/me/marketplace")
+def me_marketplace(
+    req: schemas.MarketplaceOptInRequest,
+    current_driver: Driver = Depends(get_current_driver),
+    db: Session = Depends(get_db),
+):
+    """Driver toggles marketplace opt-in and optionally sets their location."""
+    current_driver.marketplace_opt_in = req.opt_in
+    if req.country_code is not None:
+        current_driver.country_code = req.country_code
+    if req.region_code is not None:
+        current_driver.region_code = req.region_code
+    if req.city is not None:
+        current_driver.city = req.city.strip() or None
+    db.commit()
+    return {
+        "ok": True,
+        "marketplace_opt_in": bool(current_driver.marketplace_opt_in),
+        "city": current_driver.city,
+    }
+
+
+@app.get("/api/driver/marketplace/assignments")
+def api_driver_marketplace_assignments(
+    current_driver: Driver = Depends(get_current_driver),
+    db: Session = Depends(get_db),
+):
+    """Free professionals (no org) browse open assignments from any organization."""
+    _require_driver_approved(current_driver)
+    rows = (
+        db.query(models.Assignment)
+        .filter(models.Assignment.status == "open")
+        .order_by(models.Assignment.created_at.desc())
+        .limit(50)
+        .all()
+    )
+    return [
+        {
+            "id": a.id,
+            "organization_id": a.organization_id,
+            "origin_city": a.origin_city,
+            "dest_city": a.dest_city,
+            "depart_at": a.depart_at.isoformat() if a.depart_at else None,
+            "notes": a.notes,
+            "status": a.status,
+            "created_at": a.created_at.isoformat() if a.created_at else None,
+        }
+        for a in rows
+    ]
 
 
 @app.get("/api/marketplace/drivers", response_model=List[schemas.DriverRead])
