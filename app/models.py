@@ -38,6 +38,8 @@ class Driver(Base):
     rating_avg = Column(Float, nullable=True)
     rating_count = Column(Integer, nullable=False, default=0)
     marketplace_opt_in = Column(Boolean, nullable=False, default=False, index=True)
+    kyc_status = Column(String(32), nullable=True)  # None | "pending" | "verified" | "rejected"
+    kyc_verified_at = Column(DateTime, nullable=True)
 
     trips = relationship("Trip", back_populates="driver", cascade="all, delete-orphan")
     telemetry_events = relationship("TelemetryEvent", back_populates="driver", cascade="all, delete-orphan")

@@ -15,23 +15,23 @@
       <div id="loginScreen" class="card">
         <div class="card-header">
           <div>
-            <div class="card-title">Σύνδεση οδηγού</div>
-            <div class="small-text">Passwordless login με κινητό</div>
+            <div class="card-title" data-i18n="login_title">Σύνδεση οδηγού</div>
+            <div class="small-text" data-i18n="login_subtitle">Passwordless login με κινητό</div>
           </div>
           <span class="badge">AUTH</span>
         </div>
 
-        <div class="field-group"><label for="loginPhone">Κινητό τηλέφωνο</label><input id="loginPhone" placeholder="π.χ. 69XXXXXXXX" /></div>
-        <div class="field-group"><label for="loginEmail">Email (προαιρετικό)</label><input id="loginEmail" placeholder="name@example.com" /></div>
-        <div class="field-group"><label for="loginName">Όνομα (προαιρετικό)</label><input id="loginName" placeholder="π.χ. Γιώργος" /></div>
-        <div class="field-group"><label for="loginOrganization">Φορέας (προαιρετικό)</label><select id="loginOrganization"><option value="">— Ελεύθερος επαγγελματίας —</option></select></div>
+        <div class="field-group"><label for="loginPhone" data-i18n="phone_label">Κινητό τηλέφωνο</label><input id="loginPhone" placeholder="π.χ. 69XXXXXXXX" /></div>
+        <div class="field-group"><label for="loginEmail" data-i18n="email_label">Email (προαιρετικό)</label><input id="loginEmail" placeholder="name@example.com" /></div>
+        <div class="field-group"><label for="loginName" data-i18n="name_label">Όνομα (προαιρετικό)</label><input id="loginName" placeholder="π.χ. Γιώργος" /></div>
+        <div class="field-group"><label for="loginOrganization" data-i18n="org_label">Φορέας (προαιρετικό)</label><select id="loginOrganization"><option value="">— Ελεύθερος επαγγελματίας —</option></select></div>
         <button class="outline full" id="btnRequestOrg">+ Αίτημα νέου φορέα</button>
-        <button class="primary full" id="btnSendCode">Αποστολή κωδικού</button>
+        <button class="primary full" id="btnSendCode" data-i18n="send_code">Αποστολή κωδικού</button>
 
         <div class="field-group" id="codeWrap" style="display:none; margin-top:10px;">
-          <label for="loginCode">Κωδικός 6 ψηφίων</label>
+          <label for="loginCode" data-i18n="code_label">Κωδικός 6 ψηφίων</label>
           <input id="loginCode" maxlength="6" placeholder="123456" />
-          <button class="primary full" id="btnVerifyCode">Επιβεβαίωση</button>
+          <button class="primary full" id="btnVerifyCode" data-i18n="verify_btn">Επιβεβαίωση</button>
         </div>
         <div class="small-text" id="authMessage"></div>
       </div>
@@ -164,6 +164,11 @@
         <a href="mailto:support@thronoschain.org">support@thronoschain.org</a>
       </span>
     </footer>
+
+    <!-- Language toggle (EL/DE) -->
+    <div style="position:fixed;bottom:20px;right:20px;z-index:999;">
+      <button id="btnLangToggle" class="outline" style="border-radius:50%;width:44px;height:44px;padding:0;font-size:12px;font-weight:700;opacity:0.85;" onclick="toggleLang()">DE</button>
+    </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="./app.js"></script>

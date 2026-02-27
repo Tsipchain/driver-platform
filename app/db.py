@@ -139,6 +139,8 @@ def _run_sqlite_migrations() -> None:
             "rating_avg": "ALTER TABLE drivers ADD COLUMN rating_avg REAL",
             "rating_count": "ALTER TABLE drivers ADD COLUMN rating_count INTEGER NOT NULL DEFAULT 0",
             "marketplace_opt_in": "ALTER TABLE drivers ADD COLUMN marketplace_opt_in INTEGER NOT NULL DEFAULT 0",
+            "kyc_status": "ALTER TABLE drivers ADD COLUMN kyc_status TEXT",
+            "kyc_verified_at": "ALTER TABLE drivers ADD COLUMN kyc_verified_at DATETIME",
         }
         for col, ddl in driver_alterations.items():
             if col not in driver_columns:

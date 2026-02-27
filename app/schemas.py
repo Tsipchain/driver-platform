@@ -21,6 +21,7 @@ class DriverBase(BaseModel):
     rating_avg: Optional[float] = None
     rating_count: int = 0
     marketplace_opt_in: bool = False
+    kyc_status: Optional[str] = None
 
 
 class DriverCreate(DriverBase):
@@ -284,3 +285,7 @@ class RewardEventRead(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class KycUpdateRequest(BaseModel):
+    status: str = "verified"  # verified | rejected | pending
