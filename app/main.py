@@ -1147,6 +1147,146 @@ def api_operator_kyc_update(
     return {"ok": True, "driver_id": driver_id, "kyc_status": req.status}
 
 
+@app.get("/api/operator/billing")
+def api_operator_billing(
+    x_admin_token: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    forced_group, forced_org = _resolve_operator_scope(db, x_admin_token)
+    if not forced_org:
+        raise HTTPException(status_code=400, detail="Organization-scoped token required for billing")
+    org = crud.get_organization(db, forced_org)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    now = datetime.utcnow()
+    trial_days_remaining: Optional[int] = None
+    trial_expired = False
+    plan_status = org.plan_status or "trialing"
+
+    if org.trial_ends_at:
+        delta = org.trial_ends_at - now
+        trial_days_remaining = max(0, delta.days)
+        if delta.total_seconds() <= 0 and plan_status == "trialing":
+            trial_expired = True
+            plan_status = "expired"
+
+    return {
+        "plan": org.plan or "basic",
+        "plan_status": plan_status,
+        "trial_ends_at": org.trial_ends_at.isoformat() if org.trial_ends_at else None,
+        "trial_days_remaining": trial_days_remaining,
+        "trial_expired": trial_expired,
+        "org_name": org.name,
+    }
+
+
+@app.post("/api/operator/billing/checkout")
+def api_operator_billing_checkout(
+    req: schemas.CheckoutRequest,
+    request: Request,
+    x_admin_token: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    forced_group, forced_org = _resolve_operator_scope(db, x_admin_token)
+    if not forced_org:
+        raise HTTPException(status_code=400, detail="Organization-scoped token required")
+    org = crud.get_organization(db, forced_org)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    stripe_key = (os.getenv("STRIPE_SECRET_KEY") or "").strip()
+    if not stripe_key:
+        raise HTTPException(status_code=503, detail="Stripe not configured on this server")
+
+    try:
+        import stripe as _stripe
+    except ImportError:
+        raise HTTPException(status_code=503, detail="Stripe library not installed")
+
+    _stripe.api_key = stripe_key
+
+    period = req.period if req.period in {"monthly", "yearly"} else "monthly"
+    price_env = "STRIPE_PRICE_YEARLY" if period == "yearly" else "STRIPE_PRICE_MONTHLY"
+    price_id = (os.getenv(price_env) or "").strip()
+    if not price_id:
+        raise HTTPException(status_code=503, detail=f"Stripe price not configured ({price_env})")
+
+    base_url = str(request.base_url).rstrip("/")
+    try:
+        session = _stripe.checkout.Session.create(
+            payment_method_types=["card"],
+            line_items=[{"price": price_id, "quantity": 1}],
+            mode="subscription",
+            success_url=f"{base_url}/operator?payment=success",
+            cancel_url=f"{base_url}/operator?payment=cancelled",
+            metadata={"organization_id": str(forced_org)},
+            subscription_data={"metadata": {"organization_id": str(forced_org)}},
+        )
+    except Exception as exc:
+        logger.exception("stripe_checkout_error org=%s: %s", forced_org, exc)
+        raise HTTPException(status_code=500, detail="Stripe error — check server logs")
+
+    return {"checkout_url": session.url}
+
+
+@app.post("/api/stripe/webhook")
+async def api_stripe_webhook(request: Request, stripe_signature: Optional[str] = Header(default=None, alias="stripe-signature"), db: Session = Depends(get_db)):
+    payload = await request.body()
+    webhook_secret = (os.getenv("STRIPE_WEBHOOK_SECRET") or "").strip()
+
+    try:
+        import stripe as _stripe
+    except ImportError:
+        raise HTTPException(status_code=503, detail="Stripe library not installed")
+
+    if webhook_secret:
+        try:
+            event = _stripe.Webhook.construct_event(payload, stripe_signature or "", webhook_secret)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid Stripe signature")
+    else:
+        import json
+        try:
+            event = json.loads(payload)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid payload")
+
+    event_type = event.get("type", "")
+    if event_type in {"checkout.session.completed", "invoice.payment_succeeded"}:
+        data_obj = event.get("data", {}).get("object", {})
+        meta = data_obj.get("metadata") or (data_obj.get("subscription_data") or {}).get("metadata") or {}
+        org_id_str = meta.get("organization_id") or data_obj.get("client_reference_id") or ""
+        if org_id_str:
+            try:
+                org_id = int(org_id_str)
+                org = crud.get_organization(db, org_id)
+                if org:
+                    org.plan = "pro"
+                    org.plan_status = "active"
+                    db.commit()
+                    logger.info("stripe_payment_ok org_id=%s event=%s", org_id, event_type)
+            except Exception:
+                logger.exception("stripe_webhook_org_update failed org_id_str=%s", org_id_str)
+
+    elif event_type in {"customer.subscription.deleted", "invoice.payment_failed"}:
+        data_obj = event.get("data", {}).get("object", {})
+        meta = data_obj.get("metadata") or {}
+        org_id_str = meta.get("organization_id") or ""
+        if org_id_str:
+            try:
+                org_id = int(org_id_str)
+                org = crud.get_organization(db, org_id)
+                if org:
+                    org.plan_status = "cancelled" if "deleted" in event_type else "expired"
+                    db.commit()
+                    logger.info("stripe_sub_ended org_id=%s event=%s", org_id, event_type)
+            except Exception:
+                logger.exception("stripe_webhook_cancel failed org_id_str=%s", org_id_str)
+
+    return {"ok": True}
+
+
 @app.get("/api/operator/events/recent")
 def api_operator_recent_events(
     group_tag: Optional[str] = None,

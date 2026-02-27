@@ -851,6 +851,108 @@ async function loadPendingClaims() {
   });
 }
 
+// ── Billing / trial ──────────────────────────────────────────────────────────
+
+function openPaymentModal() {
+  const modal = $("paymentModal");
+  if (modal) modal.style.display = "block";
+  // Highlight radio selection visually
+  document.querySelectorAll("input[name='planPeriod']").forEach(r => {
+    r.addEventListener("change", () => {
+      $("planMonthly").style.borderColor = r.value === "monthly" ? "var(--accent)" : "rgba(255,255,255,0.15)";
+      $("planYearly").style.borderColor  = r.value === "yearly"  ? "var(--accent)" : "rgba(255,255,255,0.15)";
+    });
+  });
+}
+
+function closePaymentModal() {
+  const modal = $("paymentModal");
+  if (modal) modal.style.display = "none";
+}
+
+async function startCheckout() {
+  const period = document.querySelector("input[name='planPeriod']:checked")?.value || "monthly";
+  const token = getOperatorToken();
+  const btn = $("btnGoToStripe");
+  const msg = $("checkoutMsg");
+  if (btn) btn.disabled = true;
+  if (msg) msg.textContent = "Σύνδεση με Stripe…";
+  try {
+    const resp = await fetch(`${API_BASE}/api/operator/billing/checkout`, {
+      method: "POST",
+      headers: { "X-Admin-Token": token, "Content-Type": "application/json" },
+      body: JSON.stringify({ period }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      if (msg) msg.textContent = data.detail || "Σφάλμα σύνδεσης Stripe.";
+      if (btn) btn.disabled = false;
+      return;
+    }
+    if (data.checkout_url) {
+      window.location.href = data.checkout_url;
+    }
+  } catch (e) {
+    if (msg) msg.textContent = "Σφάλμα δικτύου. Δοκίμασε ξανά.";
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function loadBillingStatus() {
+  const token = getOperatorToken();
+  if (!token) return;
+  try {
+    const resp = await fetch(`${API_BASE}/api/operator/billing`, {
+      headers: { "X-Admin-Token": token },
+    });
+    if (!resp.ok) return;  // global admin or network error — skip
+    const b = await resp.json();
+    renderTrialBanner(b);
+  } catch (_) {}
+}
+
+function renderTrialBanner(b) {
+  const banner = $("trialBanner");
+  if (!banner) return;
+
+  const days = b.trial_days_remaining;
+  const expired = b.trial_expired;
+  const active = b.plan_status === "active";
+
+  if (active) {
+    banner.style.display = "none";
+    return;
+  }
+
+  let color, icon, msg, showBtn;
+  if (expired) {
+    color = "#ff4444";
+    icon = "🔴";
+    msg = "Η δοκιμαστική περίοδος έληξε. Η πρόσβαση είναι περιορισμένη.";
+    showBtn = true;
+  } else if (days !== null && days <= 3) {
+    color = "#ffaa00";
+    icon = "⚠️";
+    msg = `Η trial λήγει σε <strong>${days}</strong> ${days === 1 ? "μέρα" : "μέρες"}! Αναβάθμισε πριν χάσεις πρόσβαση.`;
+    showBtn = true;
+  } else if (days !== null) {
+    color = "var(--accent)";
+    icon = "🟢";
+    msg = `Trial · <strong>${days}</strong> ${days === 1 ? "μέρα" : "μέρες"} απομένουν`;
+    showBtn = days <= 7;
+  } else {
+    banner.style.display = "none";
+    return;
+  }
+
+  banner.style.display = "block";
+  banner.innerHTML = `<div style="background:rgba(0,0,0,0.4);border:1px solid ${color};border-radius:10px;padding:12px 16px;margin-bottom:12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+    <span style="font-size:18px;">${icon}</span>
+    <span class="small-text" style="flex:1;">${msg}</span>
+    ${showBtn ? `<button class="primary" style="padding:6px 14px;font-size:12px;" onclick="openPaymentModal()">Αναβάθμιση →</button>` : ""}
+  </div>`;
+}
+
 window.addEventListener("DOMContentLoaded", () => {
   applyLang();
   renderAuthState();
@@ -864,17 +966,34 @@ window.addEventListener("DOMContentLoaded", () => {
     $("btnOperatorLogin")?.addEventListener("click", openOperatorLoginModal);
     $("btnCloseOperatorLogin")?.addEventListener("click", closeOperatorLoginModal);
     $("btnSubmitOperatorLogin")?.addEventListener("click", submitOperatorLogin);
-    $("btnLoadOperator")?.addEventListener("click", async () => { await loadOperatorDashboard(); await loadOperatorVoice(); await loadPendingDrivers(); await loadPendingClaims(); });
+    $("btnLoadOperator")?.addEventListener("click", async () => {
+      await loadOperatorDashboard(); await loadOperatorVoice();
+      await loadPendingDrivers(); await loadPendingClaims();
+      await loadBillingStatus();
+    });
+    $("btnClosePaymentModal")?.addEventListener("click", closePaymentModal);
     initOperatorMap();
     applyBranding();
+
+    // Handle Stripe redirect callbacks
+    const qp = new URLSearchParams(window.location.search);
+    if (qp.get("payment") === "success") {
+      toast("Η πληρωμή ολοκληρώθηκε! Η συνδρομή σας είναι ενεργή.");
+      history.replaceState({}, "", window.location.pathname);
+    } else if (qp.get("payment") === "cancelled") {
+      toast("Η πληρωμή ακυρώθηκε. Μπορείς να δοκιμάσεις ξανά όποτε θέλεις.");
+      history.replaceState({}, "", window.location.pathname);
+    }
+
     // Auto-load when redirected from landing page with token pre-set
-    if (new URLSearchParams(window.location.search).get("autoload") === "1" && getOperatorToken()) {
+    if (qp.get("autoload") === "1" && getOperatorToken()) {
       if ($("operatorAuthState")) $("operatorAuthState").textContent = "Authenticated — Loading…";
       setTimeout(async () => {
         await loadOperatorDashboard();
         await loadOperatorVoice();
         await loadPendingDrivers();
         await loadPendingClaims();
+        await loadBillingStatus();
         if ($("operatorAuthState")) $("operatorAuthState").textContent = "Authenticated";
       }, 300);
     }

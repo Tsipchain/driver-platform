@@ -289,3 +289,15 @@ class RewardEventRead(BaseModel):
 
 class KycUpdateRequest(BaseModel):
     status: str = "verified"  # verified | rejected | pending
+
+
+class CheckoutRequest(BaseModel):
+    period: str = "monthly"  # monthly | yearly
+
+
+class BillingStatus(BaseModel):
+    plan: str
+    plan_status: str          # trialing | active | expired | cancelled
+    trial_ends_at: Optional[datetime] = None
+    trial_days_remaining: Optional[int] = None
+    trial_expired: bool = False
