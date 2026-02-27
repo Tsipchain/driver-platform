@@ -289,6 +289,7 @@ class TrialAttempt(Base):
     email_hash = Column(String(128), nullable=False, index=True)
     phone_hash = Column(String(128), nullable=True, index=True)
     status = Column(String(32), nullable=False)
+    success = Column(Integer, nullable=True, default=0)  # legacy column kept for DB compat
     retry_after = Column(Integer, nullable=True)
     organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
     error_code = Column(String(64), nullable=True)
