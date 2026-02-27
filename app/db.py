@@ -181,6 +181,7 @@ def _run_sqlite_migrations() -> None:
             "email_hash": "ALTER TABLE trial_attempts ADD COLUMN email_hash TEXT",
             "phone_hash": "ALTER TABLE trial_attempts ADD COLUMN phone_hash TEXT",
             "status": "ALTER TABLE trial_attempts ADD COLUMN status TEXT",
+            "success": "ALTER TABLE trial_attempts ADD COLUMN success INTEGER DEFAULT 0",
             "retry_after": "ALTER TABLE trial_attempts ADD COLUMN retry_after INTEGER",
             "organization_id": "ALTER TABLE trial_attempts ADD COLUMN organization_id INTEGER",
             "error_code": "ALTER TABLE trial_attempts ADD COLUMN error_code TEXT",
