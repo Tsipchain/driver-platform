@@ -308,3 +308,7 @@ class MarketplaceOptInRequest(BaseModel):
     country_code: Optional[str] = None
     region_code: Optional[str] = None
     city: Optional[str] = None
+
+
+class AddonCheckoutRequest(BaseModel):
+    addon_type: str = "marketplace"  # marketplace | rewards | white_label

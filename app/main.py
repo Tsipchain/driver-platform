@@ -452,6 +452,8 @@ def is_feature_enabled(org: Optional[models.Organization], feature: str) -> bool
         base.add("white_label_branding")
     if "rewards" in addons:
         base.add("rewards_module")
+    if "marketplace" in addons:
+        base.add("marketplace_global")
     if "pdf_packs" in addons:
         base.add("exports_pdf")
     return feature in base
@@ -1175,6 +1177,7 @@ def api_operator_billing(
             trial_expired = True
             plan_status = "expired"
 
+    addons = _addons_set(org.addons_json)
     return {
         "plan": org.plan or "basic",
         "plan_status": plan_status,
@@ -1182,6 +1185,7 @@ def api_operator_billing(
         "trial_days_remaining": trial_days_remaining,
         "trial_expired": trial_expired,
         "org_name": org.name,
+        "marketplace_addon": "marketplace" in addons,
     }
 
 
@@ -1234,6 +1238,62 @@ def api_operator_billing_checkout(
     return {"checkout_url": session.url}
 
 
+@app.post("/api/operator/billing/addon")
+def api_operator_billing_addon(
+    req: schemas.AddonCheckoutRequest,
+    request: Request,
+    x_admin_token: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    """Create a Stripe Checkout session for a paid add-on (e.g. marketplace access)."""
+    _, forced_org = _resolve_operator_scope(db, x_admin_token)
+    if not forced_org:
+        raise HTTPException(status_code=400, detail="Organization-scoped token required")
+    org = crud.get_organization(db, forced_org)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    allowed_addons = {"marketplace", "rewards", "white_label"}
+    addon_type = req.addon_type if req.addon_type in allowed_addons else "marketplace"
+
+    # Check if addon already active
+    if addon_type in _addons_set(org.addons_json):
+        raise HTTPException(status_code=409, detail=f"Addon '{addon_type}' already active")
+
+    stripe_key = (os.getenv("STRIPE_SECRET_KEY") or "").strip()
+    if not stripe_key:
+        raise HTTPException(status_code=503, detail="Stripe not configured on this server")
+
+    # Env var pattern: STRIPE_PRICE_ADDON_MARKETPLACE, STRIPE_PRICE_ADDON_REWARDS, etc.
+    price_env = f"STRIPE_PRICE_ADDON_{addon_type.upper()}"
+    price_id = (os.getenv(price_env) or "").strip()
+    if not price_id:
+        raise HTTPException(status_code=503, detail=f"Stripe add-on price not configured ({price_env})")
+
+    try:
+        import stripe as _stripe
+    except ImportError:
+        raise HTTPException(status_code=503, detail="Stripe library not installed")
+
+    _stripe.api_key = stripe_key
+    base_url = str(request.base_url).rstrip("/")
+    try:
+        session = _stripe.checkout.Session.create(
+            payment_method_types=["card"],
+            line_items=[{"price": price_id, "quantity": 1}],
+            mode="subscription",
+            success_url=f"{base_url}/operator?addon={addon_type}_success",
+            cancel_url=f"{base_url}/operator?addon={addon_type}_cancelled",
+            metadata={"organization_id": str(forced_org), "addon_type": addon_type},
+            subscription_data={"metadata": {"organization_id": str(forced_org), "addon_type": addon_type}},
+        )
+    except Exception as exc:
+        logger.exception("stripe_addon_checkout_error org=%s addon=%s: %s", forced_org, addon_type, exc)
+        raise HTTPException(status_code=500, detail="Stripe error — check server logs")
+
+    return {"checkout_url": session.url}
+
+
 @app.post("/api/stripe/webhook")
 async def api_stripe_webhook(request: Request, stripe_signature: Optional[str] = Header(default=None, alias="stripe-signature"), db: Session = Depends(get_db)):
     payload = await request.body()
@@ -1256,20 +1316,40 @@ async def api_stripe_webhook(request: Request, stripe_signature: Optional[str] =
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid payload")
 
+    import json as _json
+
+    def _get_addons(org) -> dict:
+        try:
+            return _json.loads(org.addons_json or "{}") if org.addons_json else {}
+        except Exception:
+            return {}
+
+    def _save_addons(org, addons: dict):
+        org.addons_json = _json.dumps(addons)
+
     event_type = event.get("type", "")
     if event_type in {"checkout.session.completed", "invoice.payment_succeeded"}:
         data_obj = event.get("data", {}).get("object", {})
         meta = data_obj.get("metadata") or (data_obj.get("subscription_data") or {}).get("metadata") or {}
         org_id_str = meta.get("organization_id") or data_obj.get("client_reference_id") or ""
+        addon_type = meta.get("addon_type") or ""
         if org_id_str:
             try:
                 org_id = int(org_id_str)
                 org = crud.get_organization(db, org_id)
                 if org:
-                    org.plan = "pro"
-                    org.plan_status = "active"
+                    if addon_type:
+                        # This is an add-on payment — activate the addon
+                        addons = _get_addons(org)
+                        addons[addon_type] = True
+                        _save_addons(org, addons)
+                        logger.info("stripe_addon_activated org_id=%s addon=%s event=%s", org_id, addon_type, event_type)
+                    else:
+                        # This is a plan subscription payment
+                        org.plan = "pro"
+                        org.plan_status = "active"
+                        logger.info("stripe_payment_ok org_id=%s event=%s", org_id, event_type)
                     db.commit()
-                    logger.info("stripe_payment_ok org_id=%s event=%s", org_id, event_type)
             except Exception:
                 logger.exception("stripe_webhook_org_update failed org_id_str=%s", org_id_str)
 
@@ -1277,14 +1357,22 @@ async def api_stripe_webhook(request: Request, stripe_signature: Optional[str] =
         data_obj = event.get("data", {}).get("object", {})
         meta = data_obj.get("metadata") or {}
         org_id_str = meta.get("organization_id") or ""
+        addon_type = meta.get("addon_type") or ""
         if org_id_str:
             try:
                 org_id = int(org_id_str)
                 org = crud.get_organization(db, org_id)
                 if org:
-                    org.plan_status = "cancelled" if "deleted" in event_type else "expired"
+                    if addon_type and "deleted" in event_type:
+                        # Remove the addon
+                        addons = _get_addons(org)
+                        addons.pop(addon_type, None)
+                        _save_addons(org, addons)
+                        logger.info("stripe_addon_removed org_id=%s addon=%s event=%s", org_id, addon_type, event_type)
+                    elif not addon_type:
+                        org.plan_status = "cancelled" if "deleted" in event_type else "expired"
+                        logger.info("stripe_sub_ended org_id=%s event=%s", org_id, event_type)
                     db.commit()
-                    logger.info("stripe_sub_ended org_id=%s event=%s", org_id, event_type)
             except Exception:
                 logger.exception("stripe_webhook_cancel failed org_id_str=%s", org_id_str)
 

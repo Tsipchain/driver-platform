@@ -160,6 +160,21 @@
         <!-- Trial / billing banner -->
         <div id="trialBanner" style="display:none;"></div>
 
+        <!-- Add-ons card (shown only when operator is authenticated) -->
+        <div class="card" id="addonsCard" style="display:none;">
+          <div class="card-header">
+            <div class="card-title">Add-ons</div>
+            <span class="badge" style="background:rgba(255,255,255,0.1);color:inherit;font-size:10px;">EXTRA</span>
+          </div>
+          <div id="addonMarketplaceRow" style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;">
+            <div>
+              <div style="font-weight:600;font-size:14px;">🔍 Marketplace ελεύθερων οδηγών</div>
+              <div class="small-text" style="margin-top:2px;opacity:0.7;">Αναζητήστε &amp; προσελκύστε ελεύθερους επαγγελματίες taxi στην περιοχή σας.</div>
+            </div>
+            <div id="addonMarketplaceCtrl" style="min-width:130px;text-align:right;margin-left:12px;"></div>
+          </div>
+        </div>
+
         <div class="card">
           <div class="card-header"><div class="card-title" id="operatorTitle">Operator Dashboard</div></div>
           <div class="row"><button class="primary full" id="btnOperatorLogin">Operator Login</button><button class="outline full" id="btnLoadOperator">Load dashboard</button></div>

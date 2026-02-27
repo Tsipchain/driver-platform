@@ -995,7 +995,48 @@ async function loadBillingStatus() {
     if (!resp.ok) return;  // global admin or network error — skip
     const b = await resp.json();
     renderTrialBanner(b);
+    renderAddons(b);
   } catch (_) {}
+}
+
+function renderAddons(b) {
+  const card = $("addonsCard");
+  if (!card) return;
+  card.style.display = "block";
+
+  const ctrl = $("addonMarketplaceCtrl");
+  if (!ctrl) return;
+
+  if (b.marketplace_addon) {
+    ctrl.innerHTML = `<span style="color:var(--accent);font-weight:600;font-size:13px;">✓ Ενεργό</span>`;
+  } else {
+    ctrl.innerHTML = `<div class="small-text" style="margin-bottom:6px;opacity:0.7;">+€19/μήνα</div>
+      <button class="primary" style="font-size:12px;padding:6px 14px;white-space:nowrap;"
+        onclick="startAddonCheckout('marketplace')">Αγορά →</button>`;
+  }
+}
+
+async function startAddonCheckout(addonType) {
+  const token = getOperatorToken();
+  const btn = event?.target;
+  if (btn) { btn.disabled = true; btn.textContent = "…"; }
+  try {
+    const resp = await fetch(`${API_BASE}/api/operator/billing/addon`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Admin-Token": token },
+      body: JSON.stringify({ addon_type: addonType }),
+    });
+    const data = await resp.json();
+    if (resp.ok && data.checkout_url) {
+      window.location.href = data.checkout_url;
+    } else {
+      toast(data.detail || "Σφάλμα Stripe.");
+      if (btn) { btn.disabled = false; btn.textContent = "Αγορά →"; }
+    }
+  } catch (_) {
+    toast("Σφάλμα σύνδεσης.");
+    if (btn) { btn.disabled = false; btn.textContent = "Αγορά →"; }
+  }
 }
 
 function renderTrialBanner(b) {
@@ -1069,6 +1110,12 @@ window.addEventListener("DOMContentLoaded", () => {
       history.replaceState({}, "", window.location.pathname);
     } else if (qp.get("payment") === "cancelled") {
       toast("Η πληρωμή ακυρώθηκε. Μπορείς να δοκιμάσεις ξανά όποτε θέλεις.");
+      history.replaceState({}, "", window.location.pathname);
+    } else if (qp.get("addon") === "marketplace_success") {
+      toast("✅ Το Marketplace add-on ενεργοποιήθηκε!");
+      history.replaceState({}, "", window.location.pathname);
+    } else if (qp.get("addon") === "marketplace_cancelled") {
+      toast("Η αγορά add-on ακυρώθηκε.");
       history.replaceState({}, "", window.location.pathname);
     }
 
