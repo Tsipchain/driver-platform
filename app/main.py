@@ -452,6 +452,8 @@ def is_feature_enabled(org: Optional[models.Organization], feature: str) -> bool
         base.add("white_label_branding")
     if "rewards" in addons:
         base.add("rewards_module")
+    if "marketplace" in addons:
+        base.add("marketplace_global")
     if "pdf_packs" in addons:
         base.add("exports_pdf")
     return feature in base
@@ -665,6 +667,10 @@ def me(current_driver: Driver = Depends(get_current_driver), db: Session = Depen
         "approved": bool(current_driver.approved),
         "kyc_status": current_driver.kyc_status,
         "company_name": current_driver.company_name,
+        "marketplace_opt_in": bool(current_driver.marketplace_opt_in),
+        "city": current_driver.city,
+        "country_code": current_driver.country_code,
+        "region_code": current_driver.region_code,
         "stats": {
             "trips": crud.count_driver_trips(db, current_driver.id),
             "telemetry": crud.count_driver_telemetry(db, current_driver.id),
@@ -1147,6 +1153,232 @@ def api_operator_kyc_update(
     return {"ok": True, "driver_id": driver_id, "kyc_status": req.status}
 
 
+@app.get("/api/operator/billing")
+def api_operator_billing(
+    x_admin_token: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    forced_group, forced_org = _resolve_operator_scope(db, x_admin_token)
+    if not forced_org:
+        raise HTTPException(status_code=400, detail="Organization-scoped token required for billing")
+    org = crud.get_organization(db, forced_org)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    now = datetime.utcnow()
+    trial_days_remaining: Optional[int] = None
+    trial_expired = False
+    plan_status = org.plan_status or "trialing"
+
+    if org.trial_ends_at:
+        delta = org.trial_ends_at - now
+        trial_days_remaining = max(0, delta.days)
+        if delta.total_seconds() <= 0 and plan_status == "trialing":
+            trial_expired = True
+            plan_status = "expired"
+
+    addons = _addons_set(org.addons_json)
+    return {
+        "plan": org.plan or "basic",
+        "plan_status": plan_status,
+        "trial_ends_at": org.trial_ends_at.isoformat() if org.trial_ends_at else None,
+        "trial_days_remaining": trial_days_remaining,
+        "trial_expired": trial_expired,
+        "org_name": org.name,
+        "marketplace_addon": "marketplace" in addons,
+    }
+
+
+@app.post("/api/operator/billing/checkout")
+def api_operator_billing_checkout(
+    req: schemas.CheckoutRequest,
+    request: Request,
+    x_admin_token: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    forced_group, forced_org = _resolve_operator_scope(db, x_admin_token)
+    if not forced_org:
+        raise HTTPException(status_code=400, detail="Organization-scoped token required")
+    org = crud.get_organization(db, forced_org)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    stripe_key = (os.getenv("STRIPE_SECRET_KEY") or "").strip()
+    if not stripe_key:
+        raise HTTPException(status_code=503, detail="Stripe not configured on this server")
+
+    try:
+        import stripe as _stripe
+    except ImportError:
+        raise HTTPException(status_code=503, detail="Stripe library not installed")
+
+    _stripe.api_key = stripe_key
+
+    period = req.period if req.period in {"monthly", "yearly"} else "monthly"
+    price_env = "STRIPE_PRICE_YEARLY" if period == "yearly" else "STRIPE_PRICE_MONTHLY"
+    price_id = (os.getenv(price_env) or "").strip()
+    if not price_id:
+        raise HTTPException(status_code=503, detail=f"Stripe price not configured ({price_env})")
+
+    base_url = str(request.base_url).rstrip("/")
+    try:
+        session = _stripe.checkout.Session.create(
+            payment_method_types=["card"],
+            line_items=[{"price": price_id, "quantity": 1}],
+            mode="subscription",
+            success_url=f"{base_url}/operator?payment=success",
+            cancel_url=f"{base_url}/operator?payment=cancelled",
+            metadata={"organization_id": str(forced_org)},
+            subscription_data={"metadata": {"organization_id": str(forced_org)}},
+        )
+    except Exception as exc:
+        logger.exception("stripe_checkout_error org=%s: %s", forced_org, exc)
+        raise HTTPException(status_code=500, detail="Stripe error — check server logs")
+
+    return {"checkout_url": session.url}
+
+
+@app.post("/api/operator/billing/addon")
+def api_operator_billing_addon(
+    req: schemas.AddonCheckoutRequest,
+    request: Request,
+    x_admin_token: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    """Create a Stripe Checkout session for a paid add-on (e.g. marketplace access)."""
+    _, forced_org = _resolve_operator_scope(db, x_admin_token)
+    if not forced_org:
+        raise HTTPException(status_code=400, detail="Organization-scoped token required")
+    org = crud.get_organization(db, forced_org)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    allowed_addons = {"marketplace", "rewards", "white_label"}
+    addon_type = req.addon_type if req.addon_type in allowed_addons else "marketplace"
+
+    # Check if addon already active
+    if addon_type in _addons_set(org.addons_json):
+        raise HTTPException(status_code=409, detail=f"Addon '{addon_type}' already active")
+
+    stripe_key = (os.getenv("STRIPE_SECRET_KEY") or "").strip()
+    if not stripe_key:
+        raise HTTPException(status_code=503, detail="Stripe not configured on this server")
+
+    # Env var pattern: STRIPE_PRICE_ADDON_MARKETPLACE, STRIPE_PRICE_ADDON_REWARDS, etc.
+    price_env = f"STRIPE_PRICE_ADDON_{addon_type.upper()}"
+    price_id = (os.getenv(price_env) or "").strip()
+    if not price_id:
+        raise HTTPException(status_code=503, detail=f"Stripe add-on price not configured ({price_env})")
+
+    try:
+        import stripe as _stripe
+    except ImportError:
+        raise HTTPException(status_code=503, detail="Stripe library not installed")
+
+    _stripe.api_key = stripe_key
+    base_url = str(request.base_url).rstrip("/")
+    try:
+        session = _stripe.checkout.Session.create(
+            payment_method_types=["card"],
+            line_items=[{"price": price_id, "quantity": 1}],
+            mode="subscription",
+            success_url=f"{base_url}/operator?addon={addon_type}_success",
+            cancel_url=f"{base_url}/operator?addon={addon_type}_cancelled",
+            metadata={"organization_id": str(forced_org), "addon_type": addon_type},
+            subscription_data={"metadata": {"organization_id": str(forced_org), "addon_type": addon_type}},
+        )
+    except Exception as exc:
+        logger.exception("stripe_addon_checkout_error org=%s addon=%s: %s", forced_org, addon_type, exc)
+        raise HTTPException(status_code=500, detail="Stripe error — check server logs")
+
+    return {"checkout_url": session.url}
+
+
+@app.post("/api/stripe/webhook")
+async def api_stripe_webhook(request: Request, stripe_signature: Optional[str] = Header(default=None, alias="stripe-signature"), db: Session = Depends(get_db)):
+    payload = await request.body()
+    webhook_secret = (os.getenv("STRIPE_WEBHOOK_SECRET") or "").strip()
+
+    try:
+        import stripe as _stripe
+    except ImportError:
+        raise HTTPException(status_code=503, detail="Stripe library not installed")
+
+    if webhook_secret:
+        try:
+            event = _stripe.Webhook.construct_event(payload, stripe_signature or "", webhook_secret)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid Stripe signature")
+    else:
+        import json
+        try:
+            event = json.loads(payload)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid payload")
+
+    import json as _json
+
+    def _get_addons(org) -> dict:
+        try:
+            return _json.loads(org.addons_json or "{}") if org.addons_json else {}
+        except Exception:
+            return {}
+
+    def _save_addons(org, addons: dict):
+        org.addons_json = _json.dumps(addons)
+
+    event_type = event.get("type", "")
+    if event_type in {"checkout.session.completed", "invoice.payment_succeeded"}:
+        data_obj = event.get("data", {}).get("object", {})
+        meta = data_obj.get("metadata") or (data_obj.get("subscription_data") or {}).get("metadata") or {}
+        org_id_str = meta.get("organization_id") or data_obj.get("client_reference_id") or ""
+        addon_type = meta.get("addon_type") or ""
+        if org_id_str:
+            try:
+                org_id = int(org_id_str)
+                org = crud.get_organization(db, org_id)
+                if org:
+                    if addon_type:
+                        # This is an add-on payment — activate the addon
+                        addons = _get_addons(org)
+                        addons[addon_type] = True
+                        _save_addons(org, addons)
+                        logger.info("stripe_addon_activated org_id=%s addon=%s event=%s", org_id, addon_type, event_type)
+                    else:
+                        # This is a plan subscription payment
+                        org.plan = "pro"
+                        org.plan_status = "active"
+                        logger.info("stripe_payment_ok org_id=%s event=%s", org_id, event_type)
+                    db.commit()
+            except Exception:
+                logger.exception("stripe_webhook_org_update failed org_id_str=%s", org_id_str)
+
+    elif event_type in {"customer.subscription.deleted", "invoice.payment_failed"}:
+        data_obj = event.get("data", {}).get("object", {})
+        meta = data_obj.get("metadata") or {}
+        org_id_str = meta.get("organization_id") or ""
+        addon_type = meta.get("addon_type") or ""
+        if org_id_str:
+            try:
+                org_id = int(org_id_str)
+                org = crud.get_organization(db, org_id)
+                if org:
+                    if addon_type and "deleted" in event_type:
+                        # Remove the addon
+                        addons = _get_addons(org)
+                        addons.pop(addon_type, None)
+                        _save_addons(org, addons)
+                        logger.info("stripe_addon_removed org_id=%s addon=%s event=%s", org_id, addon_type, event_type)
+                    elif not addon_type:
+                        org.plan_status = "cancelled" if "deleted" in event_type else "expired"
+                        logger.info("stripe_sub_ended org_id=%s event=%s", org_id, event_type)
+                    db.commit()
+            except Exception:
+                logger.exception("stripe_webhook_cancel failed org_id_str=%s", org_id_str)
+
+    return {"ok": True}
+
+
 @app.get("/api/operator/events/recent")
 def api_operator_recent_events(
     group_tag: Optional[str] = None,
@@ -1567,6 +1799,57 @@ def api_operator_pending_claims(
         q = q.filter(models.Assignment.organization_id == forced_org)
     rows = q.order_by(models.AssignmentClaim.created_at.desc()).all()
     return {"items": [{"claim_id": c.id, "assignment_id": a.id, "driver_id": c.driver_id, "status": c.status, "created_at": c.created_at} for c, a in rows]}
+
+
+@app.post("/api/me/marketplace")
+def me_marketplace(
+    req: schemas.MarketplaceOptInRequest,
+    current_driver: Driver = Depends(get_current_driver),
+    db: Session = Depends(get_db),
+):
+    """Driver toggles marketplace opt-in and optionally sets their location."""
+    current_driver.marketplace_opt_in = req.opt_in
+    if req.country_code is not None:
+        current_driver.country_code = req.country_code
+    if req.region_code is not None:
+        current_driver.region_code = req.region_code
+    if req.city is not None:
+        current_driver.city = req.city.strip() or None
+    db.commit()
+    return {
+        "ok": True,
+        "marketplace_opt_in": bool(current_driver.marketplace_opt_in),
+        "city": current_driver.city,
+    }
+
+
+@app.get("/api/driver/marketplace/assignments")
+def api_driver_marketplace_assignments(
+    current_driver: Driver = Depends(get_current_driver),
+    db: Session = Depends(get_db),
+):
+    """Free professionals (no org) browse open assignments from any organization."""
+    _require_driver_approved(current_driver)
+    rows = (
+        db.query(models.Assignment)
+        .filter(models.Assignment.status == "open")
+        .order_by(models.Assignment.created_at.desc())
+        .limit(50)
+        .all()
+    )
+    return [
+        {
+            "id": a.id,
+            "organization_id": a.organization_id,
+            "origin_city": a.origin_city,
+            "dest_city": a.dest_city,
+            "depart_at": a.depart_at.isoformat() if a.depart_at else None,
+            "notes": a.notes,
+            "status": a.status,
+            "created_at": a.created_at.isoformat() if a.created_at else None,
+        }
+        for a in rows
+    ]
 
 
 @app.get("/api/marketplace/drivers", response_model=List[schemas.DriverRead])

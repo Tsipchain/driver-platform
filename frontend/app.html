@@ -82,6 +82,28 @@
           <div class="row" style="margin-top:8px;"><button class="primary full" id="btnVoiceRecord">Start Voice</button><button class="outline full" id="btnVoiceStop" disabled>Stop & Send</button></div>
         </div>
 
+        <!-- Free professional: marketplace opt-in + open assignments (hidden for org members) -->
+        <div class="card" id="marketplaceCard" style="display:none;">
+          <div class="card-header">
+            <div class="card-title" data-i18n="marketplace_title">Marketplace δρομολογίων</div>
+            <button class="outline" id="btnRefreshMarketplace">↻</button>
+          </div>
+          <div class="small-text" data-i18n="marketplace_desc" style="margin-bottom:10px;">Εμφανίσου στους φορείς ως ελεύθερος οδηγός και ανάλαβε ανοιχτά δρομολόγια.</div>
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+              <input type="checkbox" id="marketplaceOptIn" />
+              <span class="small-text" data-i18n="marketplace_optin">Είμαι διαθέσιμος στο marketplace</span>
+            </label>
+          </div>
+          <div class="row" style="gap:8px;margin-bottom:10px;">
+            <div class="field-group" style="flex:1;margin:0;"><label for="marketplaceCity" data-i18n="marketplace_city">Πόλη σου</label><input id="marketplaceCity" placeholder="π.χ. Αθήνα" /></div>
+            <button class="outline" id="btnSaveMarketplace" style="align-self:flex-end;" data-i18n="save">Αποθήκευση</button>
+          </div>
+          <div class="small-text" id="marketplaceSaveMsg"></div>
+          <div style="margin-top:12px;"><strong class="small-text" data-i18n="marketplace_open_jobs">Ανοιχτά δρομολόγια:</strong></div>
+          <div id="marketplaceList" class="small-text" style="margin-top:6px;">-</div>
+        </div>
+
         <!-- School instructor: student management (hidden for other roles) -->
         <div class="card" id="studentsCard" style="display:none;">
           <div class="card-header">
@@ -135,6 +157,24 @@
       </div>
 
       <div id="operatorScreen" style="display:none;">
+        <!-- Trial / billing banner -->
+        <div id="trialBanner" style="display:none;"></div>
+
+        <!-- Add-ons card (shown only when operator is authenticated) -->
+        <div class="card" id="addonsCard" style="display:none;">
+          <div class="card-header">
+            <div class="card-title">Add-ons</div>
+            <span class="badge" style="background:rgba(255,255,255,0.1);color:inherit;font-size:10px;">EXTRA</span>
+          </div>
+          <div id="addonMarketplaceRow" style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;">
+            <div>
+              <div style="font-weight:600;font-size:14px;">🔍 Marketplace ελεύθερων οδηγών</div>
+              <div class="small-text" style="margin-top:2px;opacity:0.7;">Αναζητήστε &amp; προσελκύστε ελεύθερους επαγγελματίες taxi στην περιοχή σας.</div>
+            </div>
+            <div id="addonMarketplaceCtrl" style="min-width:130px;text-align:right;margin-left:12px;"></div>
+          </div>
+        </div>
+
         <div class="card">
           <div class="card-header"><div class="card-title" id="operatorTitle">Operator Dashboard</div></div>
           <div class="row"><button class="primary full" id="btnOperatorLogin">Operator Login</button><button class="outline full" id="btnLoadOperator">Load dashboard</button></div>
@@ -164,6 +204,52 @@
         <a href="mailto:support@thronoschain.org">support@thronoschain.org</a>
       </span>
     </footer>
+
+    <!-- Payment / plan selection modal -->
+    <div id="paymentModal" style="display:none;position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.75);overflow-y:auto;">
+      <div style="max-width:440px;margin:40px auto;padding:0 12px 40px;">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Επιλογή Πλάνου</div>
+            <button class="outline" id="btnClosePaymentModal">✕</button>
+          </div>
+          <p class="small-text" style="margin-bottom:16px;">Η δοκιμαστική περίοδος έληξε. Επίλεξε πλάνο για να συνεχίσεις να χρησιμοποιείς την πλατφόρμα.</p>
+
+          <div style="display:flex;gap:12px;margin-bottom:20px;">
+            <!-- Monthly -->
+            <label id="planMonthly" style="flex:1;border:2px solid var(--accent);border-radius:10px;padding:14px;cursor:pointer;text-align:center;">
+              <input type="radio" name="planPeriod" value="monthly" checked style="margin-bottom:6px;" />
+              <div style="font-weight:700;font-size:18px;">€49</div>
+              <div class="small-text">/ μήνα</div>
+              <div class="small-text" style="margin-top:4px;opacity:0.7;">Μηνιαία χρέωση</div>
+            </label>
+            <!-- Yearly -->
+            <label id="planYearly" style="flex:1;border:2px solid rgba(255,255,255,0.15);border-radius:10px;padding:14px;cursor:pointer;text-align:center;">
+              <input type="radio" name="planPeriod" value="yearly" style="margin-bottom:6px;" />
+              <div style="font-weight:700;font-size:18px;">€39</div>
+              <div class="small-text">/ μήνα</div>
+              <div style="font-size:10px;color:var(--accent);margin-top:4px;font-weight:600;">Εξοικονόμηση 20%</div>
+              <div class="small-text" style="opacity:0.7;">Ετήσια χρέωση €468</div>
+            </label>
+          </div>
+
+          <ul class="small-text" style="list-style:none;padding:0;margin:0 0 20px;">
+            <li style="margin:5px 0;">✓ Απεριόριστοι οδηγοί</li>
+            <li style="margin:5px 0;">✓ Telemetry &amp; safety scoring</li>
+            <li style="margin:5px 0;">✓ Marketplace &amp; assignments</li>
+            <li style="margin:5px 0;">✓ Voice CB (2-way)</li>
+            <li style="margin:5px 0;">✓ KYC / VerifyID integration</li>
+            <li style="margin:5px 0;">✓ 12 μήνες ιστορικό</li>
+          </ul>
+
+          <button class="primary full" id="btnGoToStripe" onclick="startCheckout()" style="font-size:15px;padding:12px;">
+            Πληρωμή με Stripe →
+          </button>
+          <div class="small-text" id="checkoutMsg" style="margin-top:8px;text-align:center;"></div>
+          <div class="small-text" style="margin-top:12px;text-align:center;opacity:0.5;">Ασφαλής πληρωμή μέσω Stripe · Ακύρωση ανά πάσα στιγμή</div>
+        </div>
+      </div>
+    </div>
 
     <!-- Language toggle (EL/DE) -->
     <div style="position:fixed;bottom:20px;right:20px;z-index:999;">

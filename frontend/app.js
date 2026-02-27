@@ -24,6 +24,15 @@ const LANG_DICT = {
     kyc_pending: "Verify KYC",
     kyc_mark_ok: "✓ Mark OK",
     no_data: "Χωρίς δεδομένα",
+    save: "Αποθήκευση",
+    marketplace_title: "Marketplace δρομολογίων",
+    marketplace_desc: "Εμφανίσου στους φορείς ως ελεύθερος οδηγός και ανάλαβε ανοιχτά δρομολόγια.",
+    marketplace_optin: "Είμαι διαθέσιμος στο marketplace",
+    marketplace_city: "Πόλη σου",
+    marketplace_open_jobs: "Ανοιχτά δρομολόγια:",
+    marketplace_claim: "Ανάληψη",
+    marketplace_claimed: "Στάλθηκε αίτηση",
+    marketplace_no_jobs: "Δεν υπάρχουν ανοιχτά δρομολόγια.",
   },
   de: {
     login_title: "Fahrer-Anmeldung",
@@ -47,6 +56,15 @@ const LANG_DICT = {
     kyc_pending: "KYC prüfen",
     kyc_mark_ok: "✓ Bestätigen",
     no_data: "Keine Daten",
+    save: "Speichern",
+    marketplace_title: "Auftrag-Marktplatz",
+    marketplace_desc: "Erscheine bei Organisationen als freier Fahrer und übernimm offene Aufträge.",
+    marketplace_optin: "Ich bin verfügbar im Marktplatz",
+    marketplace_city: "Deine Stadt",
+    marketplace_open_jobs: "Offene Aufträge:",
+    marketplace_claim: "Übernehmen",
+    marketplace_claimed: "Anfrage gesendet",
+    marketplace_no_jobs: "Keine offenen Aufträge.",
   },
 };
 function getLang() { return localStorage.getItem("lang") || "el"; }
@@ -335,6 +353,9 @@ async function enrichDriverProfile() {
     const profile = JSON.parse(localStorage.getItem("driverProfile") || "{}");
     profile.org_type = me.org_type || null;
     profile.org_name = me.org_name || null;
+    profile.organization_id = me.organization_id || null;
+    profile.marketplace_opt_in = !!me.marketplace_opt_in;
+    profile.city = me.city || null;
     localStorage.setItem("driverProfile", JSON.stringify(profile));
   } catch (_) {}
 }
@@ -348,6 +369,17 @@ function afterLoginSetup() {
       loadStudents();
     } else {
       studentsCard.style.display = "none";
+    }
+  }
+  // Marketplace card: visible for taxi free professionals (no organization)
+  const mkCard = $("marketplaceCard");
+  if (mkCard) {
+    const isFreePro = !profile.organization_id && (profile.role === "taxi" || !profile.role);
+    mkCard.style.display = isFreePro ? "block" : "none";
+    if (isFreePro) {
+      if ($("marketplaceOptIn")) $("marketplaceOptIn").checked = !!profile.marketplace_opt_in;
+      if ($("marketplaceCity")) $("marketplaceCity").value = profile.city || "";
+      loadMarketplace();
     }
   }
 }
@@ -372,6 +404,61 @@ async function loadStudents() {
       </div>`
     ).join('');
   } catch (_) {}
+}
+
+async function loadMarketplace() {
+  const list = $("marketplaceList");
+  if (!list) return;
+  list.textContent = "…";
+  try {
+    const resp = await apiFetch("/api/driver/marketplace/assignments", { skipUnauthorizedRedirect: true });
+    if (!resp.ok) { list.textContent = t("marketplace_no_jobs"); return; }
+    const items = await resp.json();
+    if (!items.length) { list.textContent = t("marketplace_no_jobs"); return; }
+    list.innerHTML = items.map(a => {
+      const from = a.origin_city || "?";
+      const to = a.dest_city || "?";
+      const when = a.depart_at ? new Date(a.depart_at).toLocaleString("el-GR", { dateStyle: "short", timeStyle: "short" }) : "—";
+      return `<div style="padding:8px;margin:5px 0;background:rgba(255,255,255,0.05);border-radius:6px;">
+        <div><strong>${from}</strong> → <strong>${to}</strong> &nbsp;|&nbsp; ${when}</div>
+        ${a.notes ? `<div class="small-text" style="margin-top:2px;opacity:0.7;">${a.notes}</div>` : ""}
+        <button class="outline" style="margin-top:6px;font-size:12px;padding:4px 10px;"
+          onclick="claimAssignment(${a.id}, this)">${t("marketplace_claim")}</button>
+      </div>`;
+    }).join("");
+  } catch (_) { list.textContent = t("marketplace_no_jobs"); }
+}
+
+async function claimAssignment(assignmentId, btn) {
+  btn.disabled = true;
+  btn.textContent = "…";
+  const resp = await apiFetch(`/api/driver/assignments/${assignmentId}/claim`, { method: "POST" });
+  if (resp.ok) {
+    btn.textContent = t("marketplace_claimed");
+    toast(t("marketplace_claimed"));
+  } else {
+    const err = await resp.json().catch(() => ({}));
+    toast(err.detail || "Αποτυχία.");
+    btn.disabled = false;
+    btn.textContent = t("marketplace_claim");
+  }
+}
+
+async function saveMarketplaceOptIn() {
+  const opt_in = $("marketplaceOptIn")?.checked ?? false;
+  const city = $("marketplaceCity")?.value.trim() || null;
+  const msg = $("marketplaceSaveMsg");
+  const resp = await apiFetch("/api/me/marketplace", {
+    method: "POST",
+    body: JSON.stringify({ opt_in, city }),
+  });
+  if (resp.ok) {
+    if (msg) { msg.textContent = "✓ Αποθηκεύτηκε"; setTimeout(() => { if (msg) msg.textContent = ""; }, 2000); }
+    // refresh marketplace list if opted in
+    if (opt_in) loadMarketplace();
+  } else {
+    if (msg) msg.textContent = "Σφάλμα αποθήκευσης.";
+  }
 }
 
 async function addStudent() {
@@ -851,6 +938,149 @@ async function loadPendingClaims() {
   });
 }
 
+// ── Billing / trial ──────────────────────────────────────────────────────────
+
+function openPaymentModal() {
+  const modal = $("paymentModal");
+  if (modal) modal.style.display = "block";
+  // Highlight radio selection visually
+  document.querySelectorAll("input[name='planPeriod']").forEach(r => {
+    r.addEventListener("change", () => {
+      $("planMonthly").style.borderColor = r.value === "monthly" ? "var(--accent)" : "rgba(255,255,255,0.15)";
+      $("planYearly").style.borderColor  = r.value === "yearly"  ? "var(--accent)" : "rgba(255,255,255,0.15)";
+    });
+  });
+}
+
+function closePaymentModal() {
+  const modal = $("paymentModal");
+  if (modal) modal.style.display = "none";
+}
+
+async function startCheckout() {
+  const period = document.querySelector("input[name='planPeriod']:checked")?.value || "monthly";
+  const token = getOperatorToken();
+  const btn = $("btnGoToStripe");
+  const msg = $("checkoutMsg");
+  if (btn) btn.disabled = true;
+  if (msg) msg.textContent = "Σύνδεση με Stripe…";
+  try {
+    const resp = await fetch(`${API_BASE}/api/operator/billing/checkout`, {
+      method: "POST",
+      headers: { "X-Admin-Token": token, "Content-Type": "application/json" },
+      body: JSON.stringify({ period }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      if (msg) msg.textContent = data.detail || "Σφάλμα σύνδεσης Stripe.";
+      if (btn) btn.disabled = false;
+      return;
+    }
+    if (data.checkout_url) {
+      window.location.href = data.checkout_url;
+    }
+  } catch (e) {
+    if (msg) msg.textContent = "Σφάλμα δικτύου. Δοκίμασε ξανά.";
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function loadBillingStatus() {
+  const token = getOperatorToken();
+  if (!token) return;
+  try {
+    const resp = await fetch(`${API_BASE}/api/operator/billing`, {
+      headers: { "X-Admin-Token": token },
+    });
+    if (!resp.ok) return;  // global admin or network error — skip
+    const b = await resp.json();
+    renderTrialBanner(b);
+    renderAddons(b);
+  } catch (_) {}
+}
+
+function renderAddons(b) {
+  const card = $("addonsCard");
+  if (!card) return;
+  card.style.display = "block";
+
+  const ctrl = $("addonMarketplaceCtrl");
+  if (!ctrl) return;
+
+  if (b.marketplace_addon) {
+    ctrl.innerHTML = `<span style="color:var(--accent);font-weight:600;font-size:13px;">✓ Ενεργό</span>`;
+  } else {
+    ctrl.innerHTML = `<div class="small-text" style="margin-bottom:6px;opacity:0.7;">+€19/μήνα</div>
+      <button class="primary" style="font-size:12px;padding:6px 14px;white-space:nowrap;"
+        onclick="startAddonCheckout('marketplace')">Αγορά →</button>`;
+  }
+}
+
+async function startAddonCheckout(addonType) {
+  const token = getOperatorToken();
+  const btn = event?.target;
+  if (btn) { btn.disabled = true; btn.textContent = "…"; }
+  try {
+    const resp = await fetch(`${API_BASE}/api/operator/billing/addon`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Admin-Token": token },
+      body: JSON.stringify({ addon_type: addonType }),
+    });
+    const data = await resp.json();
+    if (resp.ok && data.checkout_url) {
+      window.location.href = data.checkout_url;
+    } else {
+      toast(data.detail || "Σφάλμα Stripe.");
+      if (btn) { btn.disabled = false; btn.textContent = "Αγορά →"; }
+    }
+  } catch (_) {
+    toast("Σφάλμα σύνδεσης.");
+    if (btn) { btn.disabled = false; btn.textContent = "Αγορά →"; }
+  }
+}
+
+function renderTrialBanner(b) {
+  const banner = $("trialBanner");
+  if (!banner) return;
+
+  const days = b.trial_days_remaining;
+  const expired = b.trial_expired;
+  const active = b.plan_status === "active";
+
+  if (active) {
+    banner.style.display = "none";
+    return;
+  }
+
+  let color, icon, msg, showBtn;
+  if (expired) {
+    color = "#ff4444";
+    icon = "🔴";
+    msg = "Η δοκιμαστική περίοδος έληξε. Η πρόσβαση είναι περιορισμένη.";
+    showBtn = true;
+  } else if (days !== null && days <= 3) {
+    color = "#ffaa00";
+    icon = "⚠️";
+    msg = `Η trial λήγει σε <strong>${days}</strong> ${days === 1 ? "μέρα" : "μέρες"}! Αναβάθμισε πριν χάσεις πρόσβαση.`;
+    showBtn = true;
+  } else if (days !== null) {
+    color = "var(--accent)";
+    icon = "🟢";
+    msg = `Trial · <strong>${days}</strong> ${days === 1 ? "μέρα" : "μέρες"} απομένουν`;
+    showBtn = days <= 7;
+  } else {
+    banner.style.display = "none";
+    return;
+  }
+
+  banner.style.display = "block";
+  banner.innerHTML = `<div style="background:rgba(0,0,0,0.4);border:1px solid ${color};border-radius:10px;padding:12px 16px;margin-bottom:12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+    <span style="font-size:18px;">${icon}</span>
+    <span class="small-text" style="flex:1;">${msg}</span>
+    ${showBtn ? `<button class="primary" style="padding:6px 14px;font-size:12px;" onclick="openPaymentModal()">Αναβάθμιση →</button>` : ""}
+  </div>`;
+}
+
 window.addEventListener("DOMContentLoaded", () => {
   applyLang();
   renderAuthState();
@@ -864,17 +1094,40 @@ window.addEventListener("DOMContentLoaded", () => {
     $("btnOperatorLogin")?.addEventListener("click", openOperatorLoginModal);
     $("btnCloseOperatorLogin")?.addEventListener("click", closeOperatorLoginModal);
     $("btnSubmitOperatorLogin")?.addEventListener("click", submitOperatorLogin);
-    $("btnLoadOperator")?.addEventListener("click", async () => { await loadOperatorDashboard(); await loadOperatorVoice(); await loadPendingDrivers(); await loadPendingClaims(); });
+    $("btnLoadOperator")?.addEventListener("click", async () => {
+      await loadOperatorDashboard(); await loadOperatorVoice();
+      await loadPendingDrivers(); await loadPendingClaims();
+      await loadBillingStatus();
+    });
+    $("btnClosePaymentModal")?.addEventListener("click", closePaymentModal);
     initOperatorMap();
     applyBranding();
+
+    // Handle Stripe redirect callbacks
+    const qp = new URLSearchParams(window.location.search);
+    if (qp.get("payment") === "success") {
+      toast("Η πληρωμή ολοκληρώθηκε! Η συνδρομή σας είναι ενεργή.");
+      history.replaceState({}, "", window.location.pathname);
+    } else if (qp.get("payment") === "cancelled") {
+      toast("Η πληρωμή ακυρώθηκε. Μπορείς να δοκιμάσεις ξανά όποτε θέλεις.");
+      history.replaceState({}, "", window.location.pathname);
+    } else if (qp.get("addon") === "marketplace_success") {
+      toast("✅ Το Marketplace add-on ενεργοποιήθηκε!");
+      history.replaceState({}, "", window.location.pathname);
+    } else if (qp.get("addon") === "marketplace_cancelled") {
+      toast("Η αγορά add-on ακυρώθηκε.");
+      history.replaceState({}, "", window.location.pathname);
+    }
+
     // Auto-load when redirected from landing page with token pre-set
-    if (new URLSearchParams(window.location.search).get("autoload") === "1" && getOperatorToken()) {
+    if (qp.get("autoload") === "1" && getOperatorToken()) {
       if ($("operatorAuthState")) $("operatorAuthState").textContent = "Authenticated — Loading…";
       setTimeout(async () => {
         await loadOperatorDashboard();
         await loadOperatorVoice();
         await loadPendingDrivers();
         await loadPendingClaims();
+        await loadBillingStatus();
         if ($("operatorAuthState")) $("operatorAuthState").textContent = "Authenticated";
       }, 300);
     }
@@ -909,6 +1162,9 @@ window.addEventListener("DOMContentLoaded", () => {
   // School student management
   $("btnAddStudent")?.addEventListener("click", addStudent);
   $("btnRefreshStudents")?.addEventListener("click", loadStudents);
+  // Marketplace (free professionals)
+  $("btnSaveMarketplace")?.addEventListener("click", saveMarketplaceOptIn);
+  $("btnRefreshMarketplace")?.addEventListener("click", loadMarketplace);
   // Restore students card & CB inbox if already logged in
   if (getToken()) {
     afterLoginSetup();

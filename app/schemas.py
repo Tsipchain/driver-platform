@@ -289,3 +289,26 @@ class RewardEventRead(BaseModel):
 
 class KycUpdateRequest(BaseModel):
     status: str = "verified"  # verified | rejected | pending
+
+
+class CheckoutRequest(BaseModel):
+    period: str = "monthly"  # monthly | yearly
+
+
+class BillingStatus(BaseModel):
+    plan: str
+    plan_status: str          # trialing | active | expired | cancelled
+    trial_ends_at: Optional[datetime] = None
+    trial_days_remaining: Optional[int] = None
+    trial_expired: bool = False
+
+
+class MarketplaceOptInRequest(BaseModel):
+    opt_in: bool = True
+    country_code: Optional[str] = None
+    region_code: Optional[str] = None
+    city: Optional[str] = None
+
+
+class AddonCheckoutRequest(BaseModel):
+    addon_type: str = "marketplace"  # marketplace | rewards | white_label
