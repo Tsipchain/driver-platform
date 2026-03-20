@@ -1914,6 +1914,10 @@ def api_operator_rewards_grant(
 
 app.include_router(auth_router)
 
+# Mobile API for Flutter app
+from .mobile_api import router as mobile_router
+app.include_router(mobile_router)
+
 
 @app.get("/api/v1/drivers", response_model=List[schemas.DriverRead])
 def api_list_drivers(db: Session = Depends(get_db)):
