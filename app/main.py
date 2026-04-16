@@ -515,13 +515,29 @@ def _parse_multipart_voice_payload(raw_body: bytes, content_type: str) -> tuple[
 
 init_db()
 
+# SECURITY: Fail-fast on missing critical secrets — Phase 0 hardening
+_admin_token = (os.getenv("X_ADMIN_TOKEN") or os.getenv("DRIVER_ADMIN_TOKEN") or "").strip()
+if not _admin_token:
+    raise RuntimeError("SECURITY: ADMIN_TOKEN (X_ADMIN_TOKEN or DRIVER_ADMIN_TOKEN) must be set — refusing to start without an admin token")
+
+_trial_salt = (os.getenv("TRIAL_HASH_SALT") or "").strip()
+if not _trial_salt:
+    raise RuntimeError("SECURITY: TRIAL_HASH_SALT must be set — refusing to start without a hash salt")
+
+if _admin_token and len(_admin_token) < 32:
+    logger.warning("SECURITY WARNING: ADMIN_TOKEN is shorter than 32 characters — consider using a stronger token")
+
 app = FastAPI(title="Thronos Driver Service", version="0.1.0")
+
+# SECURITY: CORS restricted — Phase 0 hardening
+ALLOWED_ORIGINS = os.environ.get("CORS_ORIGINS", "https://thronoschain.org,https://driver.thronoschain.org,https://api.thronoschain.org").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Admin-Token"],
 )
 
 
